@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/* Okta Brand Colors */
+:root {
+  --okta-blue: #0066CC;
+  --okta-purple: #6B5CE7;
+  --okta-warning: #FF9900;
+  --okta-red: #E54D4D;
+  --okta-teal: #00B8A9;
+  --okta-success: #00A870;
+  --okta-dark-gray: #1D1D21;
+  --okta-medium-gray: #6E6E78;
+  --okta-light-gray: #F5F5F5;
+}
+
+/* Base styles */
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--okta-light-gray);
+  color: var(--okta-dark-gray);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Card completion animation */
+@keyframes pulse-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(0, 168, 112, 0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 20px 10px rgba(0, 168, 112, 0.2);
+    transform: scale(1.02);
+  }
+  100% {
+    box-shadow: 0 4px 20px rgba(0, 168, 112, 0.15);
+    transform: scale(1);
+  }
+}
+
+.card-completed {
+  animation: pulse-glow 0.6s ease-out;
+}
+
+/* Checkmark draw animation */
+@keyframes draw-checkmark {
+  to { stroke-dashoffset: 0; }
+}
+
+.checkmark {
+  stroke-dasharray: 50;
+  stroke-dashoffset: 50;
+  animation: draw-checkmark 0.5s ease-out forwards;
+}
+
+/* Fade slide up animation */
+@keyframes fade-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-slide-up {
+  animation: fade-slide-up 0.4s ease-out forwards;
+}
+
+/* Outcome badge staggered animation */
+.outcome-badge {
+  opacity: 0;
+  animation: fade-slide-up 0.3s ease-out forwards;
+}
+
+.outcome-badge:nth-child(1) { animation-delay: 0.1s; }
+.outcome-badge:nth-child(2) { animation-delay: 0.2s; }
+.outcome-badge:nth-child(3) { animation-delay: 0.3s; }
+
+/* Connection indicator pulse */
+@keyframes pulse-online {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.pulse-online {
+  animation: pulse-online 2s ease-in-out infinite;
+}
+
+/* Capability section styling */
+.capability-section {
+  border-left: 3px solid;
+  padding-left: 1rem;
+}
+
+/* Action button hover effects */
+.action-btn {
+  transition: all 0.2s ease;
+}
+
+.action-btn:hover {
+  transform: translateY(-1px);
+}
+
+/* ISPM Hub glow effect */
+.ispm-hub {
+  box-shadow: 0 0 40px rgba(0, 184, 169, 0.1);
+}
