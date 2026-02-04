@@ -17,6 +17,9 @@ let useCaseStates = {
   accessRequest: { completed: false, data: null, steps: [] }
 };
 
+// Raw webhook log for debugging — captures every request hitting /webhook
+const webhookLog = [];
+
 // Track connected WebSocket clients
 const clients = new Set();
 
@@ -78,7 +81,7 @@ function broadcast(message) {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', demoStartTime });
+  res.json({ status: 'ok', demoStartTime, useCaseStates });
 });
 
 // Start demo (timestamp gate)
@@ -119,8 +122,21 @@ app.post('/reset-demo', (req, res) => {
   res.json({ startTime: demoStartTime });
 });
 
+// Debug: expose raw webhook log
+app.get('/debug-log', (req, res) => {
+  res.json(webhookLog);
+});
+
 // Okta Event Hook webhook
 app.all('/webhook', (req, res) => {
+  // Log every hit for debugging
+  webhookLog.push({
+    time: new Date().toISOString(),
+    method: req.method,
+    headers: req.headers,
+    body: req.body
+  });
+
   // GET = Verification handshake
   if (req.method === 'GET') {
     const challenge = req.headers['x-okta-verification-challenge'];
