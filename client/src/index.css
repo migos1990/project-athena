@@ -1,26 +1,29 @@
 @import "tailwindcss";
 
-/* Okta Brand Colors */
+/* Okta Official Brand Colors */
 :root {
-  --okta-blue: #0066CC;
-  --okta-purple: #6B5CE7;
-  --okta-warning: #FF9900;
-  --okta-red: #E54D4D;
-  --okta-teal: #00B8A9;
-  --okta-success: #00A870;
-  --okta-dark-gray: #1D1D21;
-  --okta-medium-gray: #6E6E78;
-  --okta-light-gray: #F5F5F5;
+  --okta-blue: #3f59e4;        /* Primary brand blue */
+  --okta-purple: #6B5CE7;      /* Purple accent */
+  --okta-warning: #FF9900;     /* Warning orange */
+  --okta-red: #E54D4D;         /* Error red */
+  --okta-teal: #00B8A9;        /* Teal brand color */
+  --okta-beige: #cda371;       /* Beige/Laser accent */
+  --okta-success: #00A870;     /* Success green */
+  --okta-dark: #191919;        /* Primary dark (Cod Gray) */
+  --okta-dark-gray: #1D1D21;   /* Dark gray */
+  --okta-medium-gray: #6E6E78; /* Medium gray */
+  --okta-light-gray: #F5F5F5;  /* Light background */
 }
 
 /* Base styles */
 body {
   margin: 0;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
   background-color: var(--okta-light-gray);
-  color: var(--okta-dark-gray);
+  color: var(--okta-dark);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em; /* Tighter tracking for professional look */
 }
 
 /* Card completion animation */
@@ -107,5 +110,35 @@ body {
 
 /* ISPM Hub glow effect */
 .ispm-hub {
-  box-shadow: 0 0 40px rgba(0, 184, 169, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 184, 169, 0.12);
+  transition: box-shadow 0.3s ease;
+}
+
+.ispm-hub:hover {
+  box-shadow: 0 8px 30px rgba(0, 184, 169, 0.18);
+}
+
+/* Connection badge colors for ISPM triggers */
+.badge-iga {
+  background-color: #F3F0FF;
+  color: #6B5CE7;
+  border: 1px solid #E0D9FF;
+}
+
+.badge-pam {
+  background-color: #FFF7E6;
+  color: #FF9900;
+  border: 1px solid #FFE6B3;
+}
+
+.badge-am {
+  background-color: #E6F0FF;
+  color: #0066CC;
+  border: 1px solid #B3D1FF;
+}
+
+.badge-itdr {
+  background-color: #FFEBEB;
+  color: #E54D4D;
+  border: 1px solid #FFCCCC;
 }
