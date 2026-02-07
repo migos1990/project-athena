@@ -14,10 +14,17 @@ app.use(express.json());
 let demoStartTime = null;
 let useCaseStates = {
   mfaLogin: { completed: false, data: null },
-  accessRequest: { completed: false, data: null, steps: [] }
+  groupAssignment: { completed: false, data: null }
 };
 
-// Raw webhook log for debugging — captures every request hitting /webhook
+// Bidirectional MFA matching: keyed by transaction ID
+// Stores whichever of session.start / auth_via_mfa arrives first
+let pendingMfaEvents = new Map();
+
+// Deduplicate Okta events by UUID (Okta may retry delivery)
+const processedEventUUIDs = new Set();
+
+// Raw webhook log for debugging — captures every request hitting /webhook (capped at 100)
 const webhookLog = [];
 
 // Track connected WebSocket clients
@@ -89,8 +96,10 @@ app.post('/start-demo', (req, res) => {
   demoStartTime = new Date().toISOString();
   useCaseStates = {
     mfaLogin: { completed: false, data: null },
-    accessRequest: { completed: false, data: null, steps: [] }
+    groupAssignment: { completed: false, data: null }
   };
+  pendingMfaEvents.clear();
+  processedEventUUIDs.clear();
 
   console.log(`Demo started at ${demoStartTime}`);
 
@@ -108,8 +117,10 @@ app.post('/reset-demo', (req, res) => {
   demoStartTime = new Date().toISOString();
   useCaseStates = {
     mfaLogin: { completed: false, data: null },
-    accessRequest: { completed: false, data: null, steps: [] }
+    groupAssignment: { completed: false, data: null }
   };
+  pendingMfaEvents.clear();
+  processedEventUUIDs.clear();
 
   console.log(`Demo reset at ${demoStartTime}`);
 
@@ -129,13 +140,14 @@ app.get('/debug-log', (req, res) => {
 
 // Okta Event Hook webhook
 app.all('/webhook', (req, res) => {
-  // Log every hit for debugging
+  // Log every hit for debugging (capped at 100)
   webhookLog.push({
     time: new Date().toISOString(),
     method: req.method,
     headers: req.headers,
     body: req.body
   });
+  if (webhookLog.length > 100) webhookLog.shift();
 
   // GET = Verification handshake
   if (req.method === 'GET') {
@@ -160,7 +172,6 @@ app.all('/webhook', (req, res) => {
 
 // Process Okta events (with error handling)
 function processEvents(events) {
-  // Guard: ensure events is an array
   if (!Array.isArray(events)) {
     console.log('⚠️  Invalid payload: events is not an array');
     return;
@@ -168,58 +179,60 @@ function processEvents(events) {
 
   events.forEach(event => {
     try {
-      // Guard: skip if event is null/undefined or missing eventType
       if (!event || !event.eventType) {
         console.log('⚠️  Skipped malformed event (missing eventType)');
         return;
       }
 
+      // Deduplicate by event UUID
+      if (event.uuid && processedEventUUIDs.has(event.uuid)) {
+        console.log(`  → Skipped duplicate event (uuid: ${event.uuid})`);
+        return;
+      }
+      if (event.uuid) processedEventUUIDs.add(event.uuid);
+
       console.log(`Event received: ${event.eventType}`);
 
-      // Check if demo is active and event is after start time
       if (!shouldProcessEvent(event)) {
         console.log(`  → Skipped (demo not started or event before start time)`);
         return;
       }
 
-      // Extract common data (lenient: use fallbacks for missing fields)
       const eventData = {
         eventType: event.eventType,
         timestamp: event.published || new Date().toISOString(),
         userName: event.actor?.displayName || 'Unknown User',
         userEmail: event.actor?.alternateId || 'unknown@example.com',
         outcome: event.outcome?.result || 'UNKNOWN',
-        transactionId: event.transaction?.id || null
+        transactionId: event.transaction?.id || null,
+        sessionId: event.authenticationContext?.externalSessionId || null
       };
 
-      // Get app name for provisioning events
-      const appTarget = event.target?.find(t => t.type === 'AppInstance');
-      eventData.appName = appTarget?.displayName || 'Unknown App';
+      // Extract group name from target array
+      const groupTarget = event.target?.find(t => t.type === 'UserGroup');
+      eventData.groupName = groupTarget?.displayName || 'Unknown Group';
 
-      // Map event to use case
+      // Extract target user (for group assignment, the assigned user is in target)
+      const userTarget = event.target?.find(t => t.type === 'User');
+      if (userTarget) {
+        eventData.targetUserName = userTarget.displayName || 'Unknown User';
+        eventData.targetUserEmail = userTarget.alternateId || 'unknown@example.com';
+      }
+
       switch (event.eventType) {
         case 'user.session.start':
-          handleSessionStart(eventData);
+          handleMfaEvent('sessionStart', eventData);
           break;
         case 'user.authentication.auth_via_mfa':
-          handleMfaComplete(eventData);
+          handleMfaEvent('mfa', eventData);
           break;
-        case 'access.request.create':
-          handleAccessRequestCreate(eventData);
-          break;
-        case 'access.request.action':
-          if (eventData.outcome === 'SUCCESS') {
-            handleAccessRequestApprove(eventData);
-          }
-          break;
-        case 'application.user_membership.add':
-          handleUserProvisioned(eventData);
+        case 'group.user_membership.add':
+          handleGroupAssignment(eventData);
           break;
         default:
           console.log(`  → Ignored (unhandled event type)`);
       }
     } catch (err) {
-      // Catch any unexpected errors to prevent crash
       console.error(`⚠️  Error processing event: ${err.message}`);
     }
   });
@@ -231,33 +244,28 @@ function shouldProcessEvent(event) {
   return event.published >= demoStartTime;
 }
 
-// MFA Login flow
-let pendingMfaLogin = null;
-
-function handleSessionStart(data) {
-  console.log(`  → Session started for ${data.userEmail}`);
-  pendingMfaLogin = {
-    transactionId: data.transactionId,
-    ...data
-  };
-}
-
-function handleMfaComplete(data) {
-  console.log(`  → MFA completed for ${data.userEmail}`);
-
-  // Guard: need transaction ID to match
-  if (!data.transactionId) {
-    console.log(`  → Skipped (no transaction ID to match)`);
+// MFA Login flow — bidirectional matching by externalSessionId
+// transaction.id differs between Okta Verify push (from phone) and session.start (from browser)
+// but authenticationContext.externalSessionId is shared across all events in a login flow
+function handleMfaEvent(type, data) {
+  const key = data.sessionId;
+  if (!key) {
+    console.log(`  → Skipped (no session ID to match)`);
     return;
   }
 
-  // Check if we have a matching session start
-  if (pendingMfaLogin && pendingMfaLogin.transactionId === data.transactionId) {
+  const pending = pendingMfaEvents.get(key);
+
+  if (pending && pending.type !== type) {
+    // We have the other half — complete the use case
+    const sessionData = type === 'sessionStart' ? data : pending.data;
+    const mfaData = type === 'mfa' ? data : pending.data;
+
     useCaseStates.mfaLogin = {
       completed: true,
       data: {
-        ...data,
-        sessionStartTime: pendingMfaLogin.timestamp
+        ...mfaData,
+        sessionStartTime: sessionData.timestamp
       }
     };
 
@@ -267,58 +275,31 @@ function handleMfaComplete(data) {
       data: useCaseStates.mfaLogin.data
     });
 
-    pendingMfaLogin = null;
-    console.log(`  → MFA Login use case COMPLETED`);
+    pendingMfaEvents.delete(key);
+    console.log(`  → MFA Login use case COMPLETED (session: ${key})`);
   } else {
-    console.log(`  → No matching session start (txn: ${data.transactionId})`);
+    // Store this event and wait for the other half
+    pendingMfaEvents.set(key, { type, data });
+    console.log(`  → Stored pending ${type} (session: ${key})`);
   }
 }
 
-// Access Request flow
-function handleAccessRequestCreate(data) {
-  console.log(`  → Access request created by ${data.userEmail}`);
-  useCaseStates.accessRequest.steps.push({
-    step: 'requested',
-    ...data
-  });
+// Group Assignment flow (IGA) — single event completes the use case
+function handleGroupAssignment(data) {
+  console.log(`  → User ${data.targetUserEmail || data.userEmail} added to group ${data.groupName} by ${data.userName}`);
 
-  broadcast({
-    type: 'USE_CASE_PROGRESS',
-    useCase: 'accessRequest',
-    step: 'requested',
+  useCaseStates.groupAssignment = {
+    completed: true,
     data
-  });
-}
-
-function handleAccessRequestApprove(data) {
-  console.log(`  → Access request approved for ${data.userEmail}`);
-  useCaseStates.accessRequest.steps.push({
-    step: 'approved',
-    ...data
-  });
-
-  broadcast({
-    type: 'USE_CASE_PROGRESS',
-    useCase: 'accessRequest',
-    step: 'approved',
-    data
-  });
-}
-
-function handleUserProvisioned(data) {
-  console.log(`  → User ${data.userEmail} provisioned to ${data.appName}`);
-
-  // Mark use case as completed
-  useCaseStates.accessRequest.completed = true;
-  useCaseStates.accessRequest.data = data;
+  };
 
   broadcast({
     type: 'USE_CASE_COMPLETED',
-    useCase: 'accessRequest',
+    useCase: 'groupAssignment',
     data
   });
 
-  console.log(`  → Access Request use case COMPLETED`);
+  console.log(`  → Group Assignment use case COMPLETED`);
 }
 
 // Start server
