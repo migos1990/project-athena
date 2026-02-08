@@ -153,3 +153,121 @@ body {
 .animate-dash {
   animation: dash-flow 0.8s linear infinite;
 }
+
+/* ========================================
+   SSF Transmitter - Scoped Dark/Light Theme
+   ======================================== */
+
+/* Dark theme (default for SSF page) */
+.ssf-dark {
+  --ssf-bg: #0d1117;
+  --ssf-bg-card: #161b22;
+  --ssf-bg-code: #0d1117;
+  --ssf-bg-input: #21262d;
+  --ssf-text: #e6edf3;
+  --ssf-text-secondary: #8b949e;
+  --ssf-text-muted: #6e7681;
+  --ssf-border: #30363d;
+  --ssf-accent: #1662dd;
+}
+
+/* Light theme */
+.ssf-light {
+  --ssf-bg: #f6f8fa;
+  --ssf-bg-card: #ffffff;
+  --ssf-bg-code: #f0f2f5;
+  --ssf-bg-input: #f6f8fa;
+  --ssf-text: #1f2328;
+  --ssf-text-secondary: #656d76;
+  --ssf-text-muted: #8b949e;
+  --ssf-border: #d0d7de;
+  --ssf-accent: #1662dd;
+}
+
+.ssf-page {
+  background-color: var(--ssf-bg);
+}
+
+.ssf-card {
+  background-color: var(--ssf-bg-card);
+  border: 1px solid var(--ssf-border);
+}
+
+.ssf-code-block {
+  background-color: var(--ssf-bg-code);
+  border: 1px solid var(--ssf-border);
+}
+
+.ssf-input {
+  background-color: var(--ssf-bg-input);
+  border: 1px solid var(--ssf-border);
+  color: var(--ssf-text);
+  transition: border-color 0.15s ease;
+}
+
+.ssf-input:focus {
+  outline: none;
+  border-color: var(--ssf-accent);
+  box-shadow: 0 0 0 3px rgba(22, 98, 221, 0.15);
+}
+
+.ssf-input::placeholder {
+  color: var(--ssf-text-muted);
+}
+
+.ssf-text-primary {
+  color: var(--ssf-text);
+}
+
+.ssf-text-secondary {
+  color: var(--ssf-text-secondary);
+}
+
+.ssf-text-muted {
+  color: var(--ssf-text-muted);
+}
+
+.ssf-border {
+  border-color: var(--ssf-border);
+}
+
+/* SSF event button styling */
+.ssf-dark .ssf-card button[style] {
+  background-color: var(--ssf-bg-card);
+  border-color: var(--ssf-border);
+}
+
+.ssf-dark .ssf-card button[style]:hover:not(:disabled) {
+  background-color: #21262d;
+}
+
+.ssf-light .ssf-card button[style] {
+  background-color: #ffffff;
+  border-color: var(--ssf-border);
+}
+
+.ssf-light .ssf-card button[style]:hover:not(:disabled) {
+  background-color: #f6f8fa;
+}
+
+/* SSF select dropdown styling */
+.ssf-dark select.ssf-input option {
+  background-color: #161b22;
+  color: #e6edf3;
+}
+
+.ssf-light select.ssf-input option {
+  background-color: #ffffff;
+  color: #1f2328;
+}
+
+/* SSF transmission animation */
+@keyframes ssf-transmit-pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+.ssf-transmitting {
+  animation: ssf-transmit-pulse 0.6s ease-in-out;
+}
