@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { PipelineDiagram } from './PipelineDiagram';
 
 // Maps each use case to the pipeline nodes it activates
@@ -119,6 +119,12 @@ function SeverityDot({ severity }) {
 
 export function AccessPipeline({ useCases }) {
   const [selectedNode, setSelectedNode] = useState(null);
+  const [showRawLog, setShowRawLog] = useState(false);
+
+  // Reset raw log view when switching nodes
+  useEffect(() => {
+    setShowRawLog(false);
+  }, [selectedNode]);
 
   const activeNodes = useMemo(() => {
     const nodes = new Set();
@@ -133,6 +139,19 @@ export function AccessPipeline({ useCases }) {
   const selectedMeta = selectedNode ? NODE_META[selectedNode] : null;
   const selectedLogs = selectedNode ? getNodeEventLogs(selectedNode, useCases) : [];
   const isNodeActive = selectedNode ? activeNodes.includes(selectedNode) : false;
+
+  // Get raw data for the selected node (show all completed use case data)
+  const getRawData = () => {
+    const rawData = {};
+    if (useCases.mfaLogin.completed) {
+      rawData.mfaLogin = useCases.mfaLogin.data;
+    }
+    if (useCases.groupAssignment.completed) {
+      rawData.groupAssignment = useCases.groupAssignment.data;
+    }
+    return Object.keys(rawData).length > 0 ? rawData : null;
+  };
+  const rawData = getRawData();
 
   return (
     <main className="max-w-7xl mx-auto px-8 py-8 bg-gray-50 min-h-[70vh]">
@@ -222,6 +241,28 @@ export function AccessPipeline({ useCases }) {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Raw Log Toggle Button */}
+              {rawData && (
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <button
+                    onClick={() => setShowRawLog(!showRawLog)}
+                    className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-okta-dark rounded-lg text-xs font-semibold hover:bg-gray-200 transition-all w-full justify-center"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                    </svg>
+                    {showRawLog ? 'Hide' : 'Show'} Raw Log
+                  </button>
+
+                  {/* Expandable Raw Log */}
+                  {showRawLog && (
+                    <pre className="mt-3 text-xs bg-gray-900 text-green-400 p-3 rounded border border-gray-700 overflow-auto max-h-64 font-mono">
+                      {JSON.stringify(rawData, null, 2)}
+                    </pre>
+                  )}
                 </div>
               )}
             </div>
