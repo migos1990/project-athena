@@ -1,4 +1,4 @@
-export function ISPMHub({ detections = {} }) {
+export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }) {
   const detectionCards = [
     {
       id: 'partiallyOffboarded',
@@ -71,11 +71,19 @@ export function ISPMHub({ detections = {} }) {
           {detectionCards.map((card, idx) => {
             const detection = detections[card.id] || { completed: false, data: null };
             const isDetected = detection.completed;
+            const isOrphaned = card.id === 'orphanedAccount';
+
+            // Props for orphaned account card (hover arrow feature)
+            const orphanedProps = isOrphaned ? {
+              ref: orphanedAccountRef,
+              onMouseEnter: () => onOrphanedHover?.(true),
+              onMouseLeave: () => onOrphanedHover?.(false),
+            } : {};
 
             // PENDING STATE - Greyed out, waiting for detection
             if (!isDetected) {
               return (
-                <div key={idx} className="bg-gray-50 rounded-xl border border-gray-200 p-4 opacity-50 hover:opacity-60 transition-opacity">
+                <div key={idx} className={`bg-gray-50 rounded-xl border border-gray-200 p-4 opacity-50 hover:opacity-60 transition-all ${isOrphaned ? 'cursor-pointer hover:opacity-70' : ''}`} {...orphanedProps}>
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex-1">
                       <div className="flex items-center gap-2.5 mb-2">
@@ -93,7 +101,7 @@ export function ISPMHub({ detections = {} }) {
 
             // DETECTED STATE - Full card with alert styling
             return (
-              <div key={idx} className="bg-white rounded-xl border-2 border-red-500 p-5 card-completed shadow-md">
+              <div key={idx} className={`bg-white rounded-xl border-2 border-red-500 p-5 card-completed shadow-md ${isOrphaned ? 'cursor-pointer' : ''}`} {...orphanedProps}>
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
                     <div className="flex items-center gap-2.5 mb-2">

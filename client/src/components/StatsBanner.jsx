@@ -1,0 +1,28 @@
+export function StatsBanner({ useCases }) {
+  const completedCount = Object.values(useCases).filter(uc => uc.completed).length;
+  const productsCount = (useCases.mfaLogin.completed ? 3 : 0) + (useCases.groupAssignment.completed ? 2 : 0);
+  const pillarsCount = (useCases.mfaLogin.completed ? 1 : 0) + (useCases.groupAssignment.completed ? 1 : 0);
+
+  return (
+    <div className="bg-black">
+      <div className="max-w-7xl mx-auto px-8 py-5 flex items-center justify-between">
+        <div className="flex items-center gap-10">
+          <div className="flex items-center gap-3">
+            <span className="text-4xl font-bold text-white tracking-tight">{completedCount}</span>
+            <span className="text-xs text-gray-300 leading-tight font-semibold uppercase">Use cases<br/>demonstrated</span>
+          </div>
+          <div className="w-px h-12 bg-gray-600"></div>
+          <div className="flex items-center gap-3">
+            <span className="text-4xl font-bold text-white tracking-tight">{productsCount}</span>
+            <span className="text-xs text-gray-300 leading-tight font-semibold uppercase">Okta products<br/>in action</span>
+          </div>
+          <div className="w-px h-12 bg-gray-600"></div>
+          <div className="flex items-center gap-3">
+            <span className="text-4xl font-bold text-white tracking-tight">{pillarsCount}</span>
+            <span className="text-xs text-gray-300 leading-tight font-semibold uppercase">Parts of the Identity<br/>Security Fabric covered</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

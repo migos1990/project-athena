@@ -142,3 +142,14 @@ body {
   color: #E54D4D;
   border: 1px solid #FFCCCC;
 }
+
+/* Connection arrow flowing dash animation */
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.animate-dash {
+  animation: dash-flow 0.8s linear infinite;
+}
