@@ -1,9 +1,15 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const http = require('http');
+const { generateUseCaseNarrative } = require('./services/claudeService');
 
 const app = express();
+
+// Define known use cases (cards that exist in frontend)
+const KNOWN_USE_CASES = ['mfaLogin', 'groupAssignment'];
 const PORT = process.env.PORT || 3001;
 
 // Middleware
@@ -13,8 +19,8 @@ app.use(express.json());
 // Demo state
 let demoStartTime = null;
 let useCaseStates = {
-  mfaLogin: { completed: false, data: null },
-  groupAssignment: { completed: false, data: null }
+  mfaLogin: { completed: false, data: null, generatedContent: null },
+  groupAssignment: { completed: false, data: null, generatedContent: null }
 };
 
 // Bidirectional MFA matching: keyed by transaction ID
@@ -95,8 +101,8 @@ app.get('/health', (req, res) => {
 app.post('/start-demo', (req, res) => {
   demoStartTime = new Date().toISOString();
   useCaseStates = {
-    mfaLogin: { completed: false, data: null },
-    groupAssignment: { completed: false, data: null }
+    mfaLogin: { completed: false, data: null, generatedContent: null },
+    groupAssignment: { completed: false, data: null, generatedContent: null }
   };
   pendingMfaEvents.clear();
   processedEventUUIDs.clear();
@@ -116,8 +122,8 @@ app.post('/start-demo', (req, res) => {
 app.post('/reset-demo', (req, res) => {
   demoStartTime = new Date().toISOString();
   useCaseStates = {
-    mfaLogin: { completed: false, data: null },
-    groupAssignment: { completed: false, data: null }
+    mfaLogin: { completed: false, data: null, generatedContent: null },
+    groupAssignment: { completed: false, data: null, generatedContent: null }
   };
   pendingMfaEvents.clear();
   processedEventUUIDs.clear();
@@ -261,22 +267,61 @@ function handleMfaEvent(type, data) {
     const sessionData = type === 'sessionStart' ? data : pending.data;
     const mfaData = type === 'mfa' ? data : pending.data;
 
-    useCaseStates.mfaLogin = {
-      completed: true,
-      data: {
-        ...mfaData,
-        sessionStartTime: sessionData.timestamp
-      }
+    const transactionData = {
+      ...mfaData,
+      sessionStartTime: sessionData.timestamp
     };
 
-    broadcast({
-      type: 'USE_CASE_COMPLETED',
-      useCase: 'mfaLogin',
-      data: useCaseStates.mfaLogin.data
-    });
+    // Send to Claude WITHOUT telling it which use case (Claude must identify)
+    (async () => {
+      try {
+        const claudeResponse = await generateUseCaseNarrative({
+          transactionId: key,
+          events: [sessionData, mfaData],
+          userEmail: sessionData.userEmail || mfaData.userEmail
+        });
+
+        console.log(`[Claude] Identified use case: ${claudeResponse.identifiedUseCase}`);
+
+        // Validate: Only proceed if Claude identified a known use case
+        if (!KNOWN_USE_CASES.includes(claudeResponse.identifiedUseCase)) {
+          console.log(`[Claude] Skipping unknown use case: ${claudeResponse.identifiedUseCase}`);
+          return;
+        }
+
+        // Use Claude's identified use case as the key
+        const identifiedUseCase = claudeResponse.identifiedUseCase;
+
+        useCaseStates[identifiedUseCase] = {
+          completed: true,
+          data: transactionData,
+          generatedContent: claudeResponse
+        };
+
+        broadcast({
+          type: 'USE_CASE_COMPLETED',
+          useCase: identifiedUseCase,
+          data: transactionData,
+          generatedContent: claudeResponse
+        });
+
+        console.log(`  → ${identifiedUseCase} use case COMPLETED (session: ${key})`);
+      } catch (error) {
+        console.error(`[Claude] Error generating narrative: ${error.message}`);
+        // Fallback: broadcast without AI content
+        useCaseStates.mfaLogin = {
+          completed: true,
+          data: transactionData
+        };
+        broadcast({
+          type: 'USE_CASE_COMPLETED',
+          useCase: 'mfaLogin',
+          data: transactionData
+        });
+      }
+    })();
 
     pendingMfaEvents.delete(key);
-    console.log(`  → MFA Login use case COMPLETED (session: ${key})`);
   } else {
     // Store this event and wait for the other half
     pendingMfaEvents.set(key, { type, data });
@@ -288,18 +333,54 @@ function handleMfaEvent(type, data) {
 function handleGroupAssignment(data) {
   console.log(`  → User ${data.targetUserEmail || data.userEmail} added to group ${data.groupName} by ${data.userName}`);
 
-  useCaseStates.groupAssignment = {
-    completed: true,
-    data
-  };
+  // Send to Claude WITHOUT telling it which use case (Claude must identify)
+  (async () => {
+    try {
+      const claudeResponse = await generateUseCaseNarrative({
+        transactionId: data.transactionId || 'group-assignment',
+        events: [data],
+        userEmail: data.userEmail
+      });
 
-  broadcast({
-    type: 'USE_CASE_COMPLETED',
-    useCase: 'groupAssignment',
-    data
-  });
+      console.log(`[Claude] Identified use case: ${claudeResponse.identifiedUseCase}`);
 
-  console.log(`  → Group Assignment use case COMPLETED`);
+      // Validate: Only proceed if Claude identified a known use case
+      if (!KNOWN_USE_CASES.includes(claudeResponse.identifiedUseCase)) {
+        console.log(`[Claude] Skipping unknown use case: ${claudeResponse.identifiedUseCase}`);
+        return;
+      }
+
+      // Use Claude's identified use case as the key
+      const identifiedUseCase = claudeResponse.identifiedUseCase;
+
+      useCaseStates[identifiedUseCase] = {
+        completed: true,
+        data,
+        generatedContent: claudeResponse
+      };
+
+      broadcast({
+        type: 'USE_CASE_COMPLETED',
+        useCase: identifiedUseCase,
+        data,
+        generatedContent: claudeResponse
+      });
+
+      console.log(`  → ${identifiedUseCase} use case COMPLETED`);
+    } catch (error) {
+      console.error(`[Claude] Error generating narrative: ${error.message}`);
+      // Fallback: broadcast without AI content
+      useCaseStates.groupAssignment = {
+        completed: true,
+        data
+      };
+      broadcast({
+        type: 'USE_CASE_COMPLETED',
+        useCase: 'groupAssignment',
+        data
+      });
+    }
+  })();
 }
 
 // Start server

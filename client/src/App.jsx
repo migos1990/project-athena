@@ -30,8 +30,8 @@ function App() {
   const { isConnected, lastMessage } = useWebSocket(WS_URL);
 
   const [useCases, setUseCases] = useState({
-    mfaLogin: { completed: false, data: null },
-    groupAssignment: { completed: false, data: null }
+    mfaLogin: { completed: false, data: null, generatedContent: null },
+    groupAssignment: { completed: false, data: null, generatedContent: null }
   });
 
   const [detections, setDetections] = useState({
@@ -51,7 +51,8 @@ function App() {
         ...prev,
         [lastMessage.useCase]: {
           completed: true,
-          data: lastMessage.data
+          data: lastMessage.data,
+          generatedContent: lastMessage.generatedContent
         }
       }));
     } else if (lastMessage.type === 'DETECTION_FOUND') {

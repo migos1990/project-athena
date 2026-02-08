@@ -42,16 +42,11 @@ export function Dashboard({ useCases, detections }) {
           }
         >
           <UseCaseCard
-            title="MFA Login Protection"
-            description="Phishing-resistant authentication"
-            businessOutcome="Prevent unauthorized access with multi-factor authentication, reducing account takeover risk by 99%"
-            products={['Okta Workforce Identity', 'Adaptive MFA', 'ThreatInsight']}
-            businessOutcomes={[
-              { label: 'Risk ↓', text: 'Second factor confirmed identity, reducing impersonation risk.', bgClass: 'bg-green-50', textClass: 'text-okta-success' },
-              { label: 'Productivity ↑', text: 'Adaptive MFA only challenges when risk detected.', bgClass: 'bg-blue-50', textClass: 'text-okta-blue' }
-            ]}
+            icon="🔐"
+            title="MFA Login: Phishing-Resistant Authentication"
+            description="User completes step-up authentication with hardware key after risk detection"
             completed={useCases.mfaLogin.completed}
-            data={useCases.mfaLogin.data}
+            data={useCases.mfaLogin}
           />
           <UseCaseCard
             title="Self-Service Password Reset"
@@ -89,16 +84,11 @@ export function Dashboard({ useCases, detections }) {
           }
         >
           <UseCaseCard
-            title="Automated Group Assignment"
-            description="Automated access provisioning"
-            businessOutcome="Streamline access provisioning with automated group membership, reducing manual IT overhead by 70%"
-            products={['Okta Identity Governance', 'Lifecycle Management']}
-            businessOutcomes={[
-              { label: 'Risk ↓', text: 'Audit trail and approval workflow ensure compliance.', bgClass: 'bg-green-50', textClass: 'text-okta-success' },
-              { label: 'Efficiency ↑', text: 'Automated provisioning eliminates manual tickets.', bgClass: 'bg-blue-50', textClass: 'text-okta-blue' }
-            ]}
+            icon="⚙️"
+            title="Group Assignment: Automated Provisioning"
+            description="User automatically assigned to groups based on attributes and workflows"
             completed={useCases.groupAssignment.completed}
-            data={useCases.groupAssignment.data}
+            data={useCases.groupAssignment}
           />
           <UseCaseCard
             title="Access Certification Campaign"

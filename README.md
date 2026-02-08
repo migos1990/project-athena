@@ -12,8 +12,18 @@ A real-time, interactive dashboard that visualizes Okta's Identity Security Fabr
 - Node.js v18+ and npm
 - Okta tenant with Event Hooks capability
 - ngrok (for exposing webhook endpoint to Okta)
+- Anthropic API key (get from https://console.anthropic.com)
 
-### 1. Start the Backend
+### 1. Configure Environment Variables
+```bash
+cd server
+# Create .env file with your Anthropic API key
+echo "ANTHROPIC_API_KEY=sk-ant-api03-YOUR_KEY_HERE" > .env
+echo "MAX_CLAUDE_CALLS_PER_HOUR=100" >> .env
+echo "MAX_COST_PER_HOUR=1.00" >> .env
+```
+
+### 2. Start the Backend
 ```bash
 cd server
 npm install
@@ -21,7 +31,7 @@ node index.js
 ```
 Backend runs on port **3001** with WebSocket server active.
 
-### 2. Start the Frontend
+### 3. Start the Frontend
 ```bash
 cd client
 npm install
@@ -29,7 +39,7 @@ npm run dev
 ```
 Frontend runs on port **5173**. Open http://localhost:5173
 
-### 3. Configure Okta Event Hook (Optional)
+### 4. Configure Okta Event Hook (Optional)
 To connect to a live Okta tenant:
 ```bash
 # Expose webhook endpoint
@@ -82,6 +92,25 @@ Project Athena is an interactive dashboard that:
 - **⚡ ISPM Hub hover interaction** - Hover over "Orphaned Account" card to see 90-degree arrow connecting to "Automated User Offboarding" with "Triggers remediation" label
 - **🔴 Generate Threats button** - Placeholder for future threat simulation feature under ITDR pillar
 
+### Version 3 Features (Current)
+- **🤖 AI-Powered Narration** - Claude API integration for dynamic content generation:
+  - Real-time AI analysis of Okta events using Claude 4.5 Haiku
+  - Automatic use case identification (no pre-labeling required)
+  - Dynamic card content generation (title, description, narrative, business outcomes)
+  - Context-aware narratives with specific details (user, location, device, timing)
+  - Pre-defined card slots populated with AI-generated content
+  - Purple gradient "AI Insights" section on completed cards
+  - Fallback to static templates if Claude API fails
+- **💰 Cost-Optimized Architecture**:
+  - In-memory caching prevents duplicate API calls (~$0.002 per use case)
+  - Usage tracking with configurable rate limits (100 calls/hour, $1/hour default)
+  - Real-time cost monitoring in server logs
+  - Estimated demo cost: $0.02-0.05 per session
+- **🔒 Robust Error Handling**:
+  - Graceful degradation with static fallback narratives
+  - No frontend breakage if API is unavailable
+  - Transaction-based event correlation ensures accuracy
+
 ---
 
 ## 🎮 Demo Workflow
@@ -109,6 +138,7 @@ Project Athena is an interactive dashboard that:
 | **Event Processing** | Custom event correlator | Matches related events (e.g., MFA challenge + validation) |
 | **Visualization** | SVG + foreignObject | Scalable, interactive pipeline diagram |
 | **State Management** | React hooks (useState, useMemo) | Lifted state pattern for cross-route sharing |
+| **AI Integration** | Claude 4.5 Haiku via Anthropic SDK | Real-time event interpretation and content generation |
 
 ---
 
