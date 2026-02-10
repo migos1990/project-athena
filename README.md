@@ -11,7 +11,7 @@ A real-time, interactive dashboard that visualizes Okta's Identity Security Fabr
 ### Prerequisites
 - Node.js v18+ and npm
 - Okta tenant with Event Hooks capability
-- ngrok (for exposing webhook endpoint to Okta)
+- GitHub Codespaces (for port forwarding and webhook endpoint)
 - Anthropic API key (get from https://console.anthropic.com)
 
 ### 1. Configure Environment Variables
@@ -42,12 +42,15 @@ Frontend runs on port **5173**. Open http://localhost:5173
 ### 4. Configure Okta Event Hook (Optional)
 To connect to a live Okta tenant:
 ```bash
-# Expose webhook endpoint
-ngrok http 3001
+# In GitHub Codespaces:
+# 1. Backend server must be running on port 3001
+# 2. Navigate to "Ports" tab in Codespaces
+# 3. Find port 3001 and set visibility to "Public"
+# 4. Copy the forwarded URL (e.g., https://xxxx-3001.app.github.dev)
 
 # In Okta Admin Console → Workflow → Event Hooks
 # Create Event Hook:
-#   URL: https://<ngrok-id>.ngrok.io/webhook
+#   URL: https://your-codespace-url-3001.app.github.dev/webhook
 #   Events: user.session.start, user.authentication.auth_via_mfa,
 #           group.user_membership.add, user.lifecycle.create
 ```
@@ -416,8 +419,9 @@ node server/index.js   # Backend (Express + WebSocket)
 # Build for production
 cd client && npm run build
 
-# Expose webhook for Okta (development)
-ngrok http 3001
+# Expose webhook for Okta (using Codespaces)
+# Navigate to "Ports" tab → port 3001 → set visibility to "Public"
+# Copy the forwarded URL for use in Okta Event Hook configuration
 
 # Check WebSocket connection
 # Open browser console on http://localhost:5173
