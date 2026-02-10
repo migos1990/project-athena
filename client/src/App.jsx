@@ -4,6 +4,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { Header } from './components/Header';
 import { StatsBanner } from './components/StatsBanner';
 import { Dashboard } from './components/Dashboard';
+import { RedTeamDashboard } from './components/RedTeamDashboard';
 import { GenerateThreats } from './components/GenerateThreats';
 import { AccessPipeline } from './components/AccessPipeline';
 import './App.css';
@@ -29,6 +30,9 @@ function App() {
   const WS_URL = getWebSocketUrl();
   const { isConnected, lastMessage } = useWebSocket(WS_URL);
 
+  const [teamView, setTeamView] = useState('blue');
+  const [attacks, setAttacks] = useState([]);
+
   const [useCases, setUseCases] = useState({
     mfaLogin: { completed: false, data: null, generatedContent: null },
     groupAssignment: { completed: false, data: null, generatedContent: null }
@@ -38,7 +42,8 @@ function App() {
     partiallyOffboarded: { completed: false, data: null },
     unmanagedServiceAccount: { completed: false, data: null },
     weakPasswordPolicy: { completed: false, data: null },
-    orphanedAccount: { completed: false, data: null }
+    orphanedAccount: { completed: false, data: null },
+    anomalousBehavior: { completed: false, data: null }
   });
 
   const [demoStartTime, setDemoStartTime] = useState(null);
@@ -63,10 +68,15 @@ function App() {
           data: lastMessage.data
         }
       }));
+    } else if (lastMessage.type === 'ATTACK_LAUNCHED') {
+      setAttacks(prev => [lastMessage.attack, ...prev]);
     } else if (lastMessage.type === 'INITIAL_STATE') {
       setUseCases(lastMessage.useCaseStates);
       if (lastMessage.detectionStates) {
         setDetections(lastMessage.detectionStates);
+      }
+      if (lastMessage.attacks) {
+        setAttacks(lastMessage.attacks);
       }
       setDemoStartTime(lastMessage.demoStartTime);
     } else if (lastMessage.type === 'DEMO_RESET' || lastMessage.type === 'DEMO_STARTED') {
@@ -78,9 +88,11 @@ function App() {
           partiallyOffboarded: { completed: false, data: null },
           unmanagedServiceAccount: { completed: false, data: null },
           weakPasswordPolicy: { completed: false, data: null },
-          orphanedAccount: { completed: false, data: null }
+          orphanedAccount: { completed: false, data: null },
+          anomalousBehavior: { completed: false, data: null }
         });
       }
+      setAttacks([]);
       setDemoStartTime(lastMessage.startTime);
     }
   }, [lastMessage]);
@@ -105,11 +117,15 @@ function App() {
           demoStartTime={demoStartTime}
           onStartDemo={handleStartDemo}
           onResetDemo={handleResetDemo}
+          teamView={teamView}
+          setTeamView={setTeamView}
         />
-        <StatsBanner useCases={useCases} />
+        <StatsBanner useCases={useCases} teamView={teamView} attacks={attacks} detections={detections} />
         <Routes>
           <Route path="/" element={
-            <Dashboard useCases={useCases} detections={detections} />
+            teamView === 'blue'
+              ? <Dashboard useCases={useCases} detections={detections} />
+              : <RedTeamDashboard attacks={attacks} apiUrl={getApiUrl()} />
           } />
           <Route path="/pipeline" element={<AccessPipeline useCases={useCases} />} />
           <Route path="/generate-threats" element={<GenerateThreats />} />

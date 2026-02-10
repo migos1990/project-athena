@@ -23,6 +23,56 @@ let useCaseStates = {
   groupAssignment: { completed: false, data: null, generatedContent: null }
 };
 
+// Red Team attack state
+let attackLog = [];
+let detectionStates = {
+  partiallyOffboarded: { completed: false, data: null },
+  unmanagedServiceAccount: { completed: false, data: null },
+  weakPasswordPolicy: { completed: false, data: null },
+  orphanedAccount: { completed: false, data: null },
+  anomalousBehavior: { completed: false, data: null }
+};
+
+// Attack-to-detection mapping (hardcoded for demo)
+const ATTACK_DETECTIONS = {
+  'password-spray': {
+    detectionIds: ['anomalousBehavior'],
+    data: {
+      affectedUser: 'john.doe@acme.com',
+      severity: 'HIGH',
+      detectedAt: new Date().toISOString(),
+      details: 'Multiple failed login attempts from IP 203.0.113.42 across 15 accounts in 2 minutes'
+    }
+  },
+  'partially-offboarded': {
+    detectionIds: ['partiallyOffboarded'],
+    data: {
+      affectedUser: 'jane.smith@acme.com',
+      severity: 'HIGH',
+      detectedAt: new Date().toISOString(),
+      details: 'User deactivated in Okta but retains active Salesforce and AWS sessions'
+    }
+  },
+  'unauthorized-mfa-reset': {
+    detectionIds: ['anomalousBehavior'],
+    data: {
+      affectedUser: 'admin@acme.com',
+      severity: 'HIGH',
+      detectedAt: new Date().toISOString(),
+      details: 'MFA factor reset from unrecognized device and IP address'
+    }
+  },
+  'cookie-theft': {
+    detectionIds: ['orphanedAccount'],
+    data: {
+      affectedUser: 'exec@acme.com',
+      severity: 'HIGH',
+      detectedAt: new Date().toISOString(),
+      details: 'Session cookie replayed from IP 198.51.100.23 (original: 10.0.1.5)'
+    }
+  }
+};
+
 // Bidirectional MFA matching: keyed by transaction ID
 // Stores whichever of session.start / auth_via_mfa arrives first
 let pendingMfaEvents = new Map();
@@ -51,7 +101,9 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({
     type: 'INITIAL_STATE',
     demoStartTime,
-    useCaseStates
+    useCaseStates,
+    detectionStates,
+    attacks: attackLog
   }));
 
   ws.on('pong', () => {
@@ -125,6 +177,14 @@ app.post('/reset-demo', (req, res) => {
     mfaLogin: { completed: false, data: null, generatedContent: null },
     groupAssignment: { completed: false, data: null, generatedContent: null }
   };
+  attackLog = [];
+  detectionStates = {
+    partiallyOffboarded: { completed: false, data: null },
+    unmanagedServiceAccount: { completed: false, data: null },
+    weakPasswordPolicy: { completed: false, data: null },
+    orphanedAccount: { completed: false, data: null },
+    anomalousBehavior: { completed: false, data: null }
+  };
   pendingMfaEvents.clear();
   processedEventUUIDs.clear();
 
@@ -133,10 +193,69 @@ app.post('/reset-demo', (req, res) => {
   broadcast({
     type: 'DEMO_RESET',
     startTime: demoStartTime,
-    useCaseStates
+    useCaseStates,
+    detectionStates,
+    attacks: attackLog
   });
 
   res.json({ startTime: demoStartTime });
+});
+
+// Red Team attack endpoint
+app.post('/attack', (req, res) => {
+  const { attackType } = req.body;
+
+  if (!attackType) {
+    return res.status(400).json({ error: 'attackType is required' });
+  }
+
+  const timestamp = new Date().toISOString();
+  const attack = {
+    attackType,
+    timestamp,
+    id: `attack-${Date.now()}`
+  };
+
+  // Add to attack log
+  attackLog.unshift(attack);
+
+  // Broadcast attack launched
+  broadcast({
+    type: 'ATTACK_LAUNCHED',
+    attack
+  });
+
+  console.log(`🔴 Red Team attack launched: ${attackType}`);
+
+  // Trigger Blue Team detection after delay (1.5-3 seconds)
+  const attackMapping = ATTACK_DETECTIONS[attackType];
+  if (attackMapping && attackMapping.detectionIds.length > 0) {
+    const delay = 1500 + Math.random() * 1500; // 1.5-3 seconds
+
+    setTimeout(() => {
+      attackMapping.detectionIds.forEach(detectionId => {
+        // Update detection state
+        detectionStates[detectionId] = {
+          completed: true,
+          data: {
+            ...attackMapping.data,
+            detectedAt: new Date().toISOString()
+          }
+        };
+
+        // Broadcast detection to Blue Team
+        broadcast({
+          type: 'DETECTION_FOUND',
+          detectionId,
+          data: detectionStates[detectionId].data
+        });
+
+        console.log(`🔵 Blue Team detection triggered: ${detectionId}`);
+      });
+    }, delay);
+  }
+
+  res.json({ success: true, attack });
 });
 
 // Debug: expose raw webhook log

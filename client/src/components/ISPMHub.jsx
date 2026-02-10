@@ -1,4 +1,8 @@
+import { useState } from 'react';
+
 export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
   const detectionCards = [
     {
       id: 'partiallyOffboarded',
@@ -44,7 +48,10 @@ export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }
     <section className="mb-8">
       <div className="bg-gradient-to-br from-teal-50 to-white rounded-2xl border-2 border-okta-teal p-8 ispm-hub shadow-md">
         {/* Section Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div
+          className="flex items-center justify-between mb-6 cursor-pointer"
+          onClick={() => setIsCollapsed(!isCollapsed)}
+        >
           <div className="flex items-center gap-4">
             <div className="w-11 h-11 rounded-xl bg-okta-teal flex items-center justify-center shadow-sm">
               <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -63,11 +70,21 @@ export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }
               {detectedCount} of {detectionCards.length} detected
             </span>
             <span className="px-4 py-1.5 bg-teal-100 text-okta-teal text-xs font-bold rounded-full border border-teal-200">HUB</span>
+            <svg
+              className={`w-5 h-5 text-okta-medium-gray transition-transform ${isCollapsed ? '-rotate-90' : 'rotate-0'}`}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/>
+            </svg>
           </div>
         </div>
 
         {/* Detection Cards Grid */}
-        <div className="grid grid-cols-2 gap-4">
+        {!isCollapsed && (
+          <div className="grid grid-cols-2 gap-4">
           {detectionCards.map((card, idx) => {
             const detection = detections[card.id] || { completed: false, data: null };
             const isDetected = detection.completed;
@@ -157,7 +174,8 @@ export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }
               </div>
             );
           })}
-        </div>
+          </div>
+        )}
       </div>
     </section>
   );

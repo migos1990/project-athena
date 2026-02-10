@@ -59,13 +59,14 @@ ngrok http 3001
 Project Athena is an interactive dashboard that:
 - **Tracks live demos** by listening to Okta Event Hooks in real-time
 - **Visualizes the Identity Security Fabric** showing how capabilities interconnect
-- **Provides two views**: Use Case View (status cards) and Pipeline View (access flow diagram)
+- **Provides multiple views**: Blue Team (defender), Red Team (attacker), and Pipeline View
+- **Simulates attacks** with Red Team Dashboard showing 1st and 3rd party threat detection
 - **Shows detailed event logs** for each security checkpoint in the access pipeline
-- **Auto-detects use case completion** with animated checkmarks and business outcome summaries
+- **Auto-detects use case completion** with AI-powered narratives and business outcome summaries
 
-**Built for:** Okta Internal Presales Hackathon
+**Built for:** Okta Internal Presales Hackathon (GenAI for GenARR)
 **Timeline:** 1-2 day rapid prototype
-**Goal:** "Wow" prospects by showing the power of Okta's unified platform
+**Goal:** "Wow" prospects by showing the power of Okta's unified platform with real-time attack simulation
 
 ---
 
@@ -92,7 +93,7 @@ Project Athena is an interactive dashboard that:
 - **⚡ ISPM Hub hover interaction** - Hover over "Orphaned Account" card to see 90-degree arrow connecting to "Automated User Offboarding" with "Triggers remediation" label
 - **🔴 Generate Threats button** - Placeholder for future threat simulation feature under ITDR pillar
 
-### Version 3 Features (Current)
+### Version 3 Features
 - **🤖 AI-Powered Narration** - Claude API integration for dynamic content generation:
   - Real-time AI analysis of Okta events using Claude 4.5 Haiku
   - Automatic use case identification (no pre-labeling required)
@@ -111,18 +112,56 @@ Project Athena is an interactive dashboard that:
   - No frontend breakage if API is unavailable
   - Transaction-based event correlation ensures accuracy
 
+### Version 4 Features (Current)
+- **🔴 Red Team Dashboard** - Attack simulation from attacker's perspective:
+  - Blue/Red Team toggle in header navigation
+  - 4 simulated attack patterns (1st Party Data detection):
+    - Password Spray - triggers ITDR Anomalous Behavior Analysis
+    - Partially Offboarded User - triggers ISPM detection
+    - Unauthorized MFA Reset - triggers ITDR Anomalous Behavior Analysis
+    - Cookie Theft (Session Replay) - triggers ISPM Orphaned Account detection
+  - Real-time attack launch with "Launch Attack" buttons
+  - Attack Activity Log showing chronological attack history with 1st/3rd party indicators
+  - Attacks trigger corresponding Blue Team detections with 1.5-3 second delay
+- **📡 SSF Transmitter Integration** - 3rd Party threat detection:
+  - Full SSF (Shared Signals Framework) transmitter UI integrated into Red Team Dashboard
+  - Multiple security providers (CrowdStrike, Microsoft Defender, Okta ITDR, Zscaler, Netskope)
+  - 4 threat event types per provider (Malware Detected, Suspicious Process, etc.)
+  - RSA-256 key generation and JWKS export
+  - Real-time JWT payload viewer
+  - Config persistence via localStorage
+  - SSF events appear in Attack Activity Log as "3rd Party" threats
+- **🎯 Organized Threat Sections**:
+  - "Threats identified by 1st Party Data" - collapsible pillar section (red)
+  - "Threats identified by 3rd Party Data" - collapsible pillar section (purple)
+  - Unified Attack Activity Log at bottom with responsive 3-column grid layout
+  - Consistent visual language with Blue Team Dashboard
+- **⚡ Demo Reset Synchronization**:
+  - Reset button clears both attacks and detections
+  - Clean slate for repeated demos
+  - Attack log and detection states fully synchronized
+
 ---
 
 ## 🎮 Demo Workflow
 
+### Blue Team (Defender) Workflow
 1. **Open Dashboard** - All cards show greyed out in "pending" state
 2. **Click "Start Demo"** - Records timestamp; only events after this time are processed
 3. **Perform live Okta demo** - Login with MFA, assign user to group, etc.
-4. **Watch cards complete** - Animated checkmarks, business outcomes appear
+4. **Watch cards complete** - Animated checkmarks, AI-powered narratives, business outcomes appear
 5. **Switch to Pipeline View** - See access flow diagram with highlighted nodes
 6. **Click nodes** - Inspect event logs showing exactly what happened at each step
 7. **Hover ISPM Hub** - See security posture detections trigger remediation workflows
-8. **Click "Reset"** - Clear all state for a fresh demo start
+
+### Red Team (Attacker) Workflow
+1. **Click "Red Team Dashboard"** in header - Switch to attacker perspective
+2. **Launch 1st Party Attacks** - Click "Launch Attack" on any of 4 attack patterns
+3. **Watch Attack Activity Log** - See attacks appear in chronological order with timestamps
+4. **Transmit SSF Events** - Configure SSF transmitter and send 3rd party threat signals
+5. **Switch to Blue Team** - See corresponding detections light up in real-time (1.5-3s delay)
+6. **Verify ITDR/ISPM Response** - Confirm attacks triggered correct security pillar detections
+7. **Click "Reset"** - Clear all attacks and detections for fresh demo
 
 ---
 
@@ -149,16 +188,25 @@ project-athena/
 ├── client/                              # React frontend (Vite)
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── Dashboard.jsx            # Use Case View (main grid)
+│   │   │   ├── Dashboard.jsx            # Blue Team View (defender perspective)
+│   │   │   ├── RedTeamDashboard.jsx     # Red Team View (attacker perspective)
 │   │   │   ├── AccessPipeline.jsx       # Pipeline View page
 │   │   │   ├── PipelineDiagram.jsx      # SVG pipeline diagram with clickable nodes
-│   │   │   ├── Header.jsx               # Top nav with view toggle
-│   │   │   ├── StatsBanner.jsx          # Stats bar (use cases completed)
+│   │   │   ├── Header.jsx               # Top nav with Blue/Red team toggle
+│   │   │   ├── StatsBanner.jsx          # Stats bar (team-aware metrics)
 │   │   │   ├── ISPMHub.jsx              # Security posture detection cards
+│   │   │   ├── AttackCard.jsx           # Individual attack pattern card
 │   │   │   ├── ConnectionArrow.jsx      # ISPM hover arrow overlay
 │   │   │   ├── UseCaseCard.jsx          # Individual use case card
-│   │   │   ├── PillarSection.jsx        # Pillar section container
-│   │   │   └── GenerateThreats.jsx      # Placeholder threat simulation page
+│   │   │   ├── PillarSection.jsx        # Pillar section container (collapsible)
+│   │   │   ├── GenerateThreats.jsx      # Legacy threat simulation page (deprecated)
+│   │   │   └── SSF/
+│   │   │       ├── SSFDashboard.jsx     # SSF Transmitter standalone view
+│   │   │       ├── EventGrid.jsx        # SSF event selection grid
+│   │   │       └── ActivityLog.jsx      # SSF activity log component
+│   │   ├── config/
+│   │   │   ├── attacks.js               # Attack pattern definitions
+│   │   │   └── providers.js             # SSF provider configurations
 │   │   ├── hooks/
 │   │   │   └── useWebSocket.js          # WebSocket connection hook
 │   │   ├── App.jsx                      # Root with BrowserRouter + Routes
@@ -166,12 +214,16 @@ project-athena/
 │   └── package.json
 │
 ├── server/                              # Express backend
-│   ├── index.js                         # Express + WebSocket + Event Hook receiver
+│   ├── index.js                         # Express + WebSocket + Attack endpoint
 │   └── package.json
 │
 ├── Pipeline/
 │   ├── Version 2.md                     # Feature planning for Version 2
 │   └── Project Athena.pptx              # Pipeline diagram reference
+│
+├── Screenshots & Logos/                 # Demo assets and branding
+│   ├── Okta_logo_(2023).svg.png
+│   └── Screenshot 2026-02-07 at 2.51.31 PM.png
 │
 ├── PRD.md                               # Original product requirements
 └── README.md                            # This file
@@ -246,7 +298,39 @@ This prevents old/duplicate events from polluting the demo experience.
 
 ## 📊 Version History
 
-### Version 2.0 (Feb 8, 2026) - **Current**
+### Version 4.0 (Feb 10, 2026) - **Current**
+**Red Team Dashboard & Attack Simulation**
+- ✅ Add Blue/Red Team toggle in header navigation
+- ✅ Create Red Team Dashboard with attacker perspective
+- ✅ Implement 4 attack patterns (1st Party Data):
+  - Password Spray → ITDR Anomalous Behavior Analysis
+  - Partially Offboarded User → ISPM detection
+  - Unauthorized MFA Reset → ITDR Anomalous Behavior Analysis
+  - Cookie Theft (Session Replay) → ISPM Orphaned Account
+- ✅ Integrate SSF Transmitter into Red Team Dashboard (3rd Party Data section)
+- ✅ Create AttackCard component with launch functionality
+- ✅ Build Attack Activity Log with 1st/3rd party indicators
+- ✅ Add /attack server endpoint with detection triggering
+- ✅ Implement delayed detection broadcast (1.5-3s) for realistic demo effect
+- ✅ Create attacks.js config with attack-to-detection mapping
+- ✅ Add collapsible pillar sections for threat organization
+- ✅ Synchronize reset functionality across Red/Blue Team dashboards
+- ✅ Add team-aware stats banner (attacks launched vs use cases completed)
+- ✅ Create responsive 3-column Activity Log grid layout
+
+### Version 3.0 (Feb 9, 2026)
+**AI-Powered Narration & Content Generation**
+- ✅ Integrate Claude 4.5 Haiku API for real-time event interpretation
+- ✅ Implement dynamic use case identification (no pre-labeling)
+- ✅ Generate context-aware narratives with event details
+- ✅ Create AI-generated business outcome badges
+- ✅ Add purple gradient "AI Insights" section to completed cards
+- ✅ Build cost-optimized architecture with in-memory caching
+- ✅ Add usage tracking and configurable rate limits
+- ✅ Implement graceful fallback to static templates
+- ✅ Add transaction-based event correlation for accuracy
+
+### Version 2.0 (Feb 8, 2026)
 **Pipeline View & Interactive Features**
 - ✅ Add React Router v7 for multi-page navigation
 - ✅ Create Pipeline View with interactive SVG access flow diagram
@@ -303,16 +387,18 @@ This prevents old/duplicate events from polluting the demo experience.
 
 ## 🔮 Future Enhancements (Out of Scope)
 
-- **Additional Use Cases**: PAM privileged session, ITDR threat detection with live events
+- **Additional Use Cases**: PAM privileged session with live Okta events
 - **Animated User Token**: Token flowing through pipeline nodes (toggle on/off)
-- **AI-Powered Interpretations**: Claude API for dynamic event narration
 - **Multi-Tenant Support**: Configure multiple Okta orgs
 - **Session Persistence**: Save demo state to database
 - **Cloud Deployment**: AWS/Vercel hosting with production WebSocket
 - **TypeScript Migration**: Type safety for larger codebase
-- **Screenshot Feature**: Capture and download demo snapshots
-- **Custom Security Remediations**: Show actual remediation workflows
+- **Screenshot Feature**: Capture and download demo snapshots (currently button placeholder)
+- **Custom Security Remediations**: Show actual remediation workflow execution
 - **CAEP Integration**: Continuous Access Evaluation Protocol live monitoring
+- **Attack Playbook Library**: Pre-configured attack sequences for common threat scenarios
+- **Multi-Stage Attack Campaigns**: Chain multiple attacks together
+- **Detection Analytics**: Track detection rates and response times
 
 ---
 
@@ -344,12 +430,19 @@ ngrok http 3001
 
 | File | Purpose |
 |------|---------|
-| `client/src/App.jsx` | Root component with BrowserRouter, Routes, and lifted state |
-| `client/src/components/Dashboard.jsx` | Use Case View - main grid with ISPM Hub + 2×2 pillars |
+| `client/src/App.jsx` | Root component with BrowserRouter, Routes, team view state, and WebSocket |
+| `client/src/components/Dashboard.jsx` | Blue Team View - defender perspective with ISPM Hub + 2×2 pillars |
+| `client/src/components/RedTeamDashboard.jsx` | Red Team View - attacker perspective with attack patterns and SSF |
 | `client/src/components/AccessPipeline.jsx` | Pipeline View - access flow page with event log drawer |
 | `client/src/components/PipelineDiagram.jsx` | SVG diagram with clickable nodes, connectors, and highlighting |
-| `server/index.js` | Express server + WebSocket + Event Hook endpoint + event correlation |
-| `Pipeline/Version 2.md` | Feature planning and design for Version 2 enhancements |
+| `client/src/components/Header.jsx` | Navigation header with Blue/Red team toggle |
+| `client/src/components/StatsBanner.jsx` | Team-aware stats (use cases vs attacks) |
+| `client/src/components/AttackCard.jsx` | Individual attack pattern card with launch button |
+| `client/src/components/SSF/EventGrid.jsx` | SSF event selection grid |
+| `client/src/config/attacks.js` | Attack pattern definitions and detection mappings |
+| `client/src/config/providers.js` | SSF provider configurations (CrowdStrike, Microsoft, etc.) |
+| `server/index.js` | Express + WebSocket + Event Hook + /attack endpoint + AI integration |
+| `Pipeline/Version 2.md` | Feature planning for Version 2 enhancements |
 | `Pipeline/Project Athena.pptx` | Reference pipeline diagram from PowerPoint |
 | `PRD.md` | Original product requirements and success criteria |
 

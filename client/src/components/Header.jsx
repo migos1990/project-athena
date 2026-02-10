@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 
-export function Header({ isConnected, demoStartTime, onStartDemo, onResetDemo }) {
+export function Header({ isConnected, demoStartTime, onStartDemo, onResetDemo, teamView, setTeamView }) {
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -66,6 +66,29 @@ export function Header({ isConnected, demoStartTime, onStartDemo, onResetDemo })
             <span className="text-xs text-okta-medium-gray font-medium">{isConnected ? 'Connected' : 'Disconnected'}</span>
           </div>
         </div>
+      </div>
+
+      {/* Blue/Red Team Toggle Sub-row */}
+      <div className="max-w-7xl mx-auto px-8 py-1.5 flex items-center gap-4 text-sm border-t border-gray-100">
+        <button
+          onClick={() => {
+            setTeamView('blue');
+            navigate('/');
+          }}
+          className={teamView === 'blue' ? 'font-semibold text-okta-blue' : 'text-okta-medium-gray hover:text-okta-dark'}
+        >
+          Blue Team Dashboard
+        </button>
+        <span className="text-gray-300">|</span>
+        <button
+          onClick={() => {
+            setTeamView('red');
+            navigate('/');
+          }}
+          className={teamView === 'red' ? 'font-semibold text-red-600' : 'text-okta-medium-gray hover:text-okta-dark'}
+        >
+          Red Team Dashboard
+        </button>
       </div>
     </header>
   );
