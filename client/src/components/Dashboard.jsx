@@ -6,14 +6,14 @@ import { ConnectionArrow } from './ConnectionArrow';
 
 export function Dashboard({ useCases, detections }) {
   const [isArrowVisible, setIsArrowVisible] = useState(false);
-  const orphanedAccountRef = useRef(null);
+  const partiallyOffboardedRef = useRef(null);
   const offboardingCardRef = useRef(null);
 
   return (
     <main className="max-w-7xl mx-auto px-8 py-8 bg-gray-50">
       {/* Connection Arrow Overlay */}
       <ConnectionArrow
-        sourceRef={orphanedAccountRef}
+        sourceRef={partiallyOffboardedRef}
         targetRef={offboardingCardRef}
         isVisible={isArrowVisible}
       />
@@ -21,8 +21,8 @@ export function Dashboard({ useCases, detections }) {
       {/* ISPM Hub Section */}
       <ISPMHub
         detections={detections}
-        onOrphanedHover={setIsArrowVisible}
-        orphanedAccountRef={orphanedAccountRef}
+        onPartiallyOffboardedHover={setIsArrowVisible}
+        partiallyOffboardedRef={partiallyOffboardedRef}
       />
 
       {/* 2x2 Pillar Grid */}
@@ -161,7 +161,12 @@ export function Dashboard({ useCases, detections }) {
           title="Identity Threat Detection & Response"
           borderColor="border-okta-red"
           bgColor="bg-okta-red"
-          completedCount={detections.anomalousBehavior?.completed ? 1 : 0}
+          completedCount={
+            (useCases.itpSessionAnomaly?.completed ? 1 : 0) +
+            (useCases.itpRiskElevation?.completed ? 1 : 0) +
+            (useCases.itpImpossibleTravel?.completed ? 1 : 0) +
+            (useCases.itpUniversalLogout?.completed ? 1 : 0)
+          }
           totalCount={4}
           collapsible={true}
           icon={
@@ -171,25 +176,39 @@ export function Dashboard({ useCases, detections }) {
           }
         >
           <UseCaseCard
+            icon="🌍"
             title="Impossible Travel Detection"
-            description="Login from New York then Tokyo 1 hour later triggers alert and blocks"
-            completed={false}
+            description="Login from New York then Tokyo 1 hour later triggers alert and blocks session"
+            completed={useCases.itpImpossibleTravel?.completed || false}
+            data={useCases.itpImpossibleTravel?.data || null}
+            generatedContent={useCases.itpImpossibleTravel?.generatedContent || null}
           />
+
           <UseCaseCard
-            title="Compromised Credential Detection"
-            description="Password found in dark web breach triggers forced reset"
-            completed={false}
+            icon="🔄"
+            title="Session Context Change"
+            description="IP or device change during active session triggers re-authentication"
+            completed={useCases.itpSessionAnomaly?.completed || false}
+            data={useCases.itpSessionAnomaly?.data || null}
+            generatedContent={useCases.itpSessionAnomaly?.generatedContent || null}
           />
+
           <UseCaseCard
-            title="Anomalous Behavior Analysis"
-            description="Unusual access patterns trigger risk score increase and MFA challenge"
-            completed={detections.anomalousBehavior?.completed || false}
-            data={detections.anomalousBehavior?.data || null}
+            icon="📈"
+            title="Risk Level Elevation"
+            description="Suspicious behavior elevates user risk score and triggers additional security checks"
+            completed={useCases.itpRiskElevation?.completed || false}
+            data={useCases.itpRiskElevation?.data || null}
+            generatedContent={useCases.itpRiskElevation?.generatedContent || null}
           />
+
           <UseCaseCard
-            title="Automated Session Termination"
-            description="High-risk activity kills active sessions immediately"
-            completed={false}
+            icon="🚨"
+            title="Universal Logout"
+            description="High-risk activity triggers immediate session termination across all applications"
+            completed={useCases.itpUniversalLogout?.completed || false}
+            data={useCases.itpUniversalLogout?.data || null}
+            generatedContent={useCases.itpUniversalLogout?.generatedContent || null}
           />
         </PillarSection>
       </div>

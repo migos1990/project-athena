@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }) {
+export function ISPMHub({ detections = {}, onPartiallyOffboardedHover, partiallyOffboardedRef }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const detectionCards = [
@@ -32,13 +32,13 @@ export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }
       badge: 'badge-am'
     },
     {
-      id: 'orphanedAccount',
-      title: 'Orphaned Account',
-      description: 'Account with no owner or manager in the system',
-      triggersPillar: 'IGA',
-      triggerColor: 'okta-purple',
-      action: 'Cleanup workflow',
-      badge: 'badge-iga'
+      id: 'ssoBypass',
+      title: 'SSO Bypass',
+      description: 'Direct authentication bypassing SSO and identity provider',
+      triggersPillar: 'AM',
+      triggerColor: 'okta-blue',
+      action: 'Enforce SSO policy',
+      badge: 'badge-am'
     }
   ];
 
@@ -88,19 +88,19 @@ export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }
           {detectionCards.map((card, idx) => {
             const detection = detections[card.id] || { completed: false, data: null };
             const isDetected = detection.completed;
-            const isOrphaned = card.id === 'orphanedAccount';
+            const isPartiallyOffboarded = card.id === 'partiallyOffboarded';
 
-            // Props for orphaned account card (hover arrow feature)
-            const orphanedProps = isOrphaned ? {
-              ref: orphanedAccountRef,
-              onMouseEnter: () => onOrphanedHover?.(true),
-              onMouseLeave: () => onOrphanedHover?.(false),
+            // Props for Partially Offboarded card (hover arrow feature)
+            const partiallyOffboardedProps = isPartiallyOffboarded ? {
+              ref: partiallyOffboardedRef,
+              onMouseEnter: () => onPartiallyOffboardedHover?.(true),
+              onMouseLeave: () => onPartiallyOffboardedHover?.(false),
             } : {};
 
             // PENDING STATE - Greyed out, waiting for detection
             if (!isDetected) {
               return (
-                <div key={idx} className={`bg-gray-50 rounded-xl border border-gray-200 p-4 opacity-50 hover:opacity-60 transition-all ${isOrphaned ? 'cursor-pointer hover:opacity-70' : ''}`} {...orphanedProps}>
+                <div key={idx} className={`bg-gray-50 rounded-xl border border-gray-200 p-4 opacity-50 hover:opacity-60 transition-all ${isPartiallyOffboarded ? 'cursor-pointer hover:opacity-70' : ''}`} {...partiallyOffboardedProps}>
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex-1">
                       <div className="flex items-center gap-2.5 mb-2">
@@ -118,7 +118,7 @@ export function ISPMHub({ detections = {}, onOrphanedHover, orphanedAccountRef }
 
             // DETECTED STATE - Full card with alert styling
             return (
-              <div key={idx} className={`bg-white rounded-xl border-2 border-red-500 p-5 card-completed shadow-md ${isOrphaned ? 'cursor-pointer' : ''}`} {...orphanedProps}>
+              <div key={idx} className={`bg-white rounded-xl border-2 border-red-500 p-5 card-completed shadow-md ${isPartiallyOffboarded ? 'cursor-pointer' : ''}`} {...partiallyOffboardedProps}>
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
                     <div className="flex items-center gap-2.5 mb-2">

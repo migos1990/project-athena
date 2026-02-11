@@ -35,15 +35,18 @@ function App() {
 
   const [useCases, setUseCases] = useState({
     mfaLogin: { completed: false, data: null, generatedContent: null },
-    groupAssignment: { completed: false, data: null, generatedContent: null }
+    groupAssignment: { completed: false, data: null, generatedContent: null },
+    itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
+    itpRiskElevation: { completed: false, data: null, generatedContent: null },
+    itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
+    itpUniversalLogout: { completed: false, data: null, generatedContent: null }
   });
 
   const [detections, setDetections] = useState({
     partiallyOffboarded: { completed: false, data: null },
     unmanagedServiceAccount: { completed: false, data: null },
     weakPasswordPolicy: { completed: false, data: null },
-    orphanedAccount: { completed: false, data: null },
-    anomalousBehavior: { completed: false, data: null }
+    ssoBypass: { completed: false, data: null }
   });
 
   const [demoStartTime, setDemoStartTime] = useState(null);
@@ -88,8 +91,7 @@ function App() {
           partiallyOffboarded: { completed: false, data: null },
           unmanagedServiceAccount: { completed: false, data: null },
           weakPasswordPolicy: { completed: false, data: null },
-          orphanedAccount: { completed: false, data: null },
-          anomalousBehavior: { completed: false, data: null }
+          ssoBypass: { completed: false, data: null }
         });
       }
       setAttacks([]);

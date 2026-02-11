@@ -5,12 +5,12 @@ export const ATTACK_PATTERNS = [
     description: 'Attempt common passwords against multiple accounts to find weak credentials.',
     severity: 'high',
     color: '#E54D4D',
-    blueTeamResponse: 'Unusual access patterns trigger risk score increase and MFA challenge',
-    detectionIds: ['anomalousBehavior'],
+    blueTeamResponse: 'Risk score elevated and additional security checks triggered',
+    detectionIds: ['itpRiskElevation'],
     simulatedData: {
       affectedUser: 'john.doe@acme.com',
       severity: 'HIGH',
-      details: 'Multiple failed login attempts from IP 203.0.113.42 across 15 accounts in 2 minutes'
+      details: 'Multiple failed login attempts from IP 203.0.113.42 across 15 accounts in 2 minutes - risk score elevated to HIGH'
     }
   },
   {
@@ -28,17 +28,17 @@ export const ATTACK_PATTERNS = [
     }
   },
   {
-    id: 'unauthorized-mfa-reset',
-    name: 'Unauthorized MFA Reset',
-    description: 'Reset MFA factors on a compromised account to maintain persistence.',
+    id: 'credential-leaked',
+    name: 'Credential Leaked',
+    description: 'Compromised credentials used to login from unusual geographic location.',
     severity: 'high',
     color: '#E54D4D',
-    blueTeamResponse: 'Unusual access patterns trigger risk score increase and MFA challenge',
-    detectionIds: ['anomalousBehavior'],
+    blueTeamResponse: 'Impossible travel detection triggers session block and MFA challenge',
+    detectionIds: ['itpImpossibleTravel'],
     simulatedData: {
       affectedUser: 'admin@acme.com',
       severity: 'HIGH',
-      details: 'MFA factor reset from unrecognized device and IP address'
+      details: 'Login from Tokyo 30 minutes after login from New York - impossible travel detected'
     }
   },
   {

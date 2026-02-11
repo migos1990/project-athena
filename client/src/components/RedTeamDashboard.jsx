@@ -159,6 +159,7 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
                   onLaunch={handleLaunchAttack}
                   isLaunched={!!launchedAttacks[attack.id]}
                   launchData={launchedAttacks[attack.id]}
+                  showInstructions={attack.id === 'cookie-theft'}
                 />
               ))}
             </div>

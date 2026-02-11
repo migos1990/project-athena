@@ -126,6 +126,10 @@ function buildPrompt(events, userEmail) {
 **Known Use Cases:**
 - "mfaLogin": Multi-factor authentication login flow (phishing-resistant access)
 - "groupAssignment": Automated group membership assignment (workflow automation)
+- "itpSessionAnomaly": Session context change detected (IP/location/device change during active session)
+- "itpRiskElevation": User risk level elevated due to suspicious behavior
+- "itpImpossibleTravel": Impossible travel detected (login from two distant locations in short time)
+- "itpUniversalLogout": Universal logout triggered due to high-risk activity
 
 **User**: ${userEmail}
 
@@ -134,14 +138,14 @@ ${JSON.stringify(events, null, 2)}
 
 **Task**: Generate a JSON response with EXACTLY this structure:
 {
-  "identifiedUseCase": "mfaLogin" OR "groupAssignment" OR "unknown",
-  "cardTitle": "Short title (e.g., 'MFA Login: Phishing-Resistant Authentication')",
+  "identifiedUseCase": "mfaLogin" | "groupAssignment" | "itpSessionAnomaly" | "itpRiskElevation" | "itpImpossibleTravel" | "itpUniversalLogout" | "unknown",
+  "cardTitle": "Short title (e.g., 'ITP: Impossible Travel Detected')",
   "cardDescription": "One sentence summary of what happened",
   "narrative": "2-3 sentence story explaining what happened and why it matters for security",
   "businessOutcomes": [
     {
-      "icon": "🛡️ or ⚡ or ✅ or 📊",
-      "category": "Risk Reduced OR Efficiency Improved OR Compliance Maintained OR User Experience",
+      "icon": "🛡️ or ⚡ or ✅ or 📊 or 🚨",
+      "category": "Risk Reduced OR Efficiency Improved OR Compliance Maintained OR Threat Blocked",
       "description": "Specific business value (under 80 chars)"
     }
   ]
@@ -149,11 +153,17 @@ ${JSON.stringify(events, null, 2)}
 
 **Guidelines**:
 - CRITICAL: First identify which use case based on event types:
-  - If you see "user.authentication.auth_via_mfa" + "user.session.start" → likely "mfaLogin"
-  - If you see "group.user_membership.add" + workflow events → likely "groupAssignment"
+  - If you see "user.authentication.auth_via_mfa" + "user.session.start" → "mfaLogin"
+  - If you see "group.user_membership.add" → "groupAssignment"
+  - If you see "user.session.context.change" → check behaviors:
+    - behaviors includes "impossible_travel" → "itpImpossibleTravel"
+    - otherwise → "itpSessionAnomaly"
+  - If you see "user.risk.change" with elevated risk → "itpRiskElevation"
+  - If you see Universal Logout action → "itpUniversalLogout"
   - If uncertain → "unknown"
-- Generate card content that matches the identified use case
-- Focus on business value, not technical details
+- For ITP events, emphasize the behavioral signals in debugData.behaviors
+- Extract risk levels (LOW/MEDIUM/HIGH) and include in narrative
+- Focus on business value: "prevented session hijacking", "blocked credential theft"
 - Use active voice and compelling language
 - Keep narrative under 200 words
 - Generate 2-3 business outcomes maximum
