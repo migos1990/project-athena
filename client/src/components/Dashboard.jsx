@@ -46,7 +46,8 @@ export function Dashboard({ useCases, detections }) {
             title="MFA Login: Phishing-Resistant Authentication"
             description="User completes step-up authentication with hardware key after risk detection"
             completed={useCases.mfaLogin.completed}
-            data={useCases.mfaLogin}
+            data={useCases.mfaLogin.data}
+            generatedContent={useCases.mfaLogin.generatedContent}
           />
           <UseCaseCard
             title="Self-Service Password Reset"
@@ -89,7 +90,8 @@ export function Dashboard({ useCases, detections }) {
             title="Group Assignment: Automated Provisioning"
             description="User automatically assigned to groups based on attributes and workflows"
             completed={useCases.groupAssignment.completed}
-            data={useCases.groupAssignment}
+            data={useCases.groupAssignment.data}
+            generatedContent={useCases.groupAssignment.generatedContent}
           />
           <UseCaseCard
             title="Access Certification Campaign"
@@ -159,7 +161,7 @@ export function Dashboard({ useCases, detections }) {
           title="Identity Threat Detection & Response"
           borderColor="border-okta-red"
           bgColor="bg-okta-red"
-          completedCount={0}
+          completedCount={detections.anomalousBehavior?.completed ? 1 : 0}
           totalCount={4}
           collapsible={true}
           icon={

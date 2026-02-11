@@ -5,16 +5,17 @@ export function UseCaseCard({
   pillarColor = 'border-gray-300',
   completed = false,
   data = null,
+  generatedContent = null,
   title = 'Use Case',
   description = ''
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Extract Claude-generated content (falls back to props if not completed)
-  const cardTitle = data?.generatedContent?.cardTitle || title;
-  const cardDescription = data?.generatedContent?.cardDescription || description;
-  const narrative = data?.generatedContent?.narrative || '';
-  const businessOutcomes = data?.generatedContent?.businessOutcomes || [];
+  const cardTitle = generatedContent?.cardTitle || title;
+  const cardDescription = generatedContent?.cardDescription || description;
+  const narrative = generatedContent?.narrative || '';
+  const businessOutcomes = generatedContent?.businessOutcomes || [];
 
   // Format event data for display
   const getEventSummary = () => {
