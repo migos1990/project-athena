@@ -19,6 +19,13 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
   const [lastPayload, setLastPayload] = useState(null);
   const [showPayload, setShowPayload] = useState(false);
 
+  // Clear launchedAttacks when attacks prop is reset (demo reset)
+  useEffect(() => {
+    if (!attacks || attacks.length === 0) {
+      setLaunchedAttacks({});
+    }
+  }, [attacks]);
+
   // Load SSF config from localStorage
   useEffect(() => {
     const saved = localStorage.getItem('ssf-config');
@@ -50,7 +57,6 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
         }));
       }
     } catch (error) {
-      console.error('Failed to launch attack:', error);
       // Graceful fallback: show as launched anyway
       setLaunchedAttacks(prev => ({
         ...prev,
@@ -119,11 +125,9 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
         })
       });
 
-      if (response.ok) {
-        console.log('SSF event transmitted successfully');
-      }
+      // Response handled silently — UI updates via WebSocket
     } catch (error) {
-      console.error('Failed to transmit SSF event:', error);
+      // Silently handle — attack log won't show the event, which is sufficient feedback
     }
   };
 
@@ -375,7 +379,7 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
 
                   return (
                     <div
-                      key={idx}
+                      key={attack.id || idx}
                       className={`border-l-4 ${borderColor} ${bgColor} rounded-r-lg p-4`}
                     >
                       <div className="flex items-start gap-2">

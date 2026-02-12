@@ -47,8 +47,8 @@ export const ATTACK_PATTERNS = [
     description: 'Steal a session cookie and replay from a new IP to hijack an active session.',
     severity: 'high',
     color: '#E54D4D',
-    blueTeamResponse: 'Account with no owner or manager in the system',
-    detectionIds: ['orphanedAccount'],
+    blueTeamResponse: 'Session cookie replay detected — SSO bypass blocked',
+    detectionIds: ['ssoBypass'],
     simulatedData: {
       affectedUser: 'exec@acme.com',
       severity: 'HIGH',

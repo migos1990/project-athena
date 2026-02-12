@@ -1,42 +1,59 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 export function useWebSocket(url) {
   const [isConnected, setIsConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [lastMessage, setLastMessage] = useState(null);
   const wsRef = useRef(null);
+  const reconnectAttempt = useRef(0);
+  const reconnectTimeout = useRef(null);
+  const intentionalClose = useRef(false);
 
-  useEffect(() => {
+  const connect = useCallback(() => {
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('WebSocket connected');
       setIsConnected(true);
+      setReconnecting(false);
+      reconnectAttempt.current = 0;
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log('WebSocket message received:', data);
         setLastMessage(data);
       } catch (err) {
-        console.error('Failed to parse WebSocket message:', err);
+        // Ignore malformed messages
       }
     };
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
+    ws.onerror = () => {};
 
     ws.onclose = () => {
-      console.log('WebSocket disconnected');
       setIsConnected(false);
-    };
-
-    return () => {
-      ws.close();
+      if (!intentionalClose.current) {
+        setReconnecting(true);
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempt.current), 10000);
+        reconnectTimeout.current = setTimeout(() => {
+          reconnectAttempt.current++;
+          connect();
+        }, delay);
+      }
     };
   }, [url]);
 
-  return { isConnected, lastMessage, ws: wsRef.current };
+  useEffect(() => {
+    intentionalClose.current = false;
+    connect();
+    return () => {
+      intentionalClose.current = true;
+      clearTimeout(reconnectTimeout.current);
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, [connect]);
+
+  return { isConnected, lastMessage, reconnecting };
 }

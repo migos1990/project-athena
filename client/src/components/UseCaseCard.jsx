@@ -123,12 +123,6 @@ export function UseCaseCard({
 
       {/* ===== PRESERVED: Action Buttons ===== */}
       <div className="flex items-center gap-2 pt-3 border-t border-gray-100 mt-4">
-        <button className="action-btn flex items-center gap-2 px-4 py-2 bg-gray-100 text-okta-dark rounded-lg text-xs font-semibold hover:bg-gray-200 transition-all">
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-          </svg>
-          Screenshot
-        </button>
         <button
           onClick={() => setIsExpanded(!isExpanded)}
           className="action-btn flex items-center gap-2 px-4 py-2 bg-gray-100 text-okta-dark rounded-lg text-xs font-semibold hover:bg-gray-200 transition-all"

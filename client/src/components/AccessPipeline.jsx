@@ -11,6 +11,18 @@ const USE_CASE_NODE_MAP = {
     'needAccess', 'presentLogin', 'verifyIdentity', 'enrichUser', 'grantAccess',
     'identityVerification',
   ],
+  itpSessionAnomaly: [
+    'verifyIdentity', 'identityVerification', 'caep',
+  ],
+  itpRiskElevation: [
+    'verifyIdentity', 'identityVerification', 'customSecurity',
+  ],
+  itpImpossibleTravel: [
+    'verifyIdentity', 'identityVerification', 'caep', 'customSecurity',
+  ],
+  itpUniversalLogout: [
+    'verifyIdentity', 'identityVerification', 'caep', 'customSecurity',
+  ],
 };
 
 // Node display metadata
@@ -107,6 +119,40 @@ function getNodeEventLogs(nodeId, useCases) {
     if (igaLogs[nodeId]) logs.push(...igaLogs[nodeId]);
   }
 
+  // ITP use case logs
+  const itpUseCases = [
+    { key: 'itpSessionAnomaly', label: 'Session Anomaly' },
+    { key: 'itpRiskElevation', label: 'Risk Elevation' },
+    { key: 'itpImpossibleTravel', label: 'Impossible Travel' },
+    { key: 'itpUniversalLogout', label: 'Universal Logout' },
+  ];
+  for (const { key, label } of itpUseCases) {
+    if (useCases[key]?.completed) {
+      const data = useCases[key].data || {};
+      const user = data.userEmail || data.user || 'user@company.com';
+      const time = data.timestamp || data.detectedAt || data.triggeredAt || '—';
+      const anomaly = data.detectedAnomaly || data.displayMessage || label;
+      const risk = data.riskLevel || 'HIGH';
+
+      const itpLogs = {
+        verifyIdentity: [
+          { time, event: `ITP: ${label} detected`, detail: `User: ${user} — ${anomaly}`, severity: 'warning' },
+        ],
+        identityVerification: [
+          { time, event: 'Risk signal received', detail: `Risk: ${risk} — ${anomaly}`, severity: 'warning' },
+        ],
+        caep: [
+          { time, event: 'Continuous evaluation triggered', detail: `Session risk change for ${user}`, severity: 'warning' },
+        ],
+        customSecurity: [
+          { time, event: 'Security remediation applied', detail: data.displayMessage || 'Policy action taken', severity: 'success' },
+        ],
+      };
+
+      if (itpLogs[nodeId]) logs.push(...itpLogs[nodeId]);
+    }
+  }
+
   return logs;
 }
 
@@ -143,11 +189,8 @@ export function AccessPipeline({ useCases }) {
   // Get raw data for the selected node (show all completed use case data)
   const getRawData = () => {
     const rawData = {};
-    if (useCases.mfaLogin.completed) {
-      rawData.mfaLogin = useCases.mfaLogin.data;
-    }
-    if (useCases.groupAssignment.completed) {
-      rawData.groupAssignment = useCases.groupAssignment.data;
+    for (const [key, uc] of Object.entries(useCases)) {
+      if (uc.completed) rawData[key] = uc.data;
     }
     return Object.keys(rawData).length > 0 ? rawData : null;
   };

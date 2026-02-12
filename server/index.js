@@ -158,6 +158,17 @@ const heartbeatInterval = setInterval(() => {
   });
 }, 30000);
 
+// Cleanup stale pending MFA events every 5 minutes
+const pendingCleanupInterval = setInterval(() => {
+  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  for (const [key, value] of pendingMfaEvents) {
+    const eventTime = new Date(value.data?.timestamp || 0).getTime();
+    if (eventTime < fiveMinutesAgo) {
+      pendingMfaEvents.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+
 // Broadcast to all connected clients
 function broadcast(message) {
   const data = JSON.stringify(message);
@@ -178,7 +189,18 @@ app.post('/start-demo', (req, res) => {
   demoStartTime = new Date().toISOString();
   useCaseStates = {
     mfaLogin: { completed: false, data: null, generatedContent: null },
-    groupAssignment: { completed: false, data: null, generatedContent: null }
+    groupAssignment: { completed: false, data: null, generatedContent: null },
+    itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
+    itpRiskElevation: { completed: false, data: null, generatedContent: null },
+    itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
+    itpUniversalLogout: { completed: false, data: null, generatedContent: null }
+  };
+  attackLog = [];
+  detectionStates = {
+    partiallyOffboarded: { completed: false, data: null },
+    unmanagedServiceAccount: { completed: false, data: null },
+    weakPasswordPolicy: { completed: false, data: null },
+    ssoBypass: { completed: false, data: null }
   };
   pendingMfaEvents.clear();
   processedEventUUIDs.clear();
@@ -188,7 +210,9 @@ app.post('/start-demo', (req, res) => {
   broadcast({
     type: 'DEMO_STARTED',
     startTime: demoStartTime,
-    useCaseStates
+    useCaseStates,
+    detectionStates,
+    attacks: attackLog
   });
 
   res.json({ startTime: demoStartTime });
@@ -243,8 +267,9 @@ app.post('/attack', (req, res) => {
     id: `attack-${Date.now()}`
   };
 
-  // Add to attack log
+  // Add to attack log (capped at 100 entries)
   attackLog.unshift(attack);
+  if (attackLog.length > 100) attackLog.pop();
 
   // Broadcast attack launched
   broadcast({
@@ -360,7 +385,14 @@ function processEvents(events) {
         console.log(`  → Skipped duplicate event (uuid: ${event.uuid})`);
         return;
       }
-      if (event.uuid) processedEventUUIDs.add(event.uuid);
+      if (event.uuid) {
+        processedEventUUIDs.add(event.uuid);
+        // Cap at 1000 entries to prevent unbounded growth
+        if (processedEventUUIDs.size > 1000) {
+          const first = processedEventUUIDs.values().next().value;
+          processedEventUUIDs.delete(first);
+        }
+      }
 
       console.log(`Event received: ${event.eventType}`);
 
@@ -793,6 +825,7 @@ server.listen(PORT, () => {
 process.on('SIGTERM', () => {
   console.log('Shutting down...');
   clearInterval(heartbeatInterval);
+  clearInterval(pendingCleanupInterval);
   wss.close();
   server.close();
 });

@@ -28,7 +28,8 @@ function getApiUrl() {
 
 function App() {
   const WS_URL = getWebSocketUrl();
-  const { isConnected, lastMessage } = useWebSocket(WS_URL);
+  const { isConnected, lastMessage, reconnecting } = useWebSocket(WS_URL);
+  const [error, setError] = useState(null);
 
   const [teamView, setTeamView] = useState('blue');
   const [attacks, setAttacks] = useState([]);
@@ -100,15 +101,27 @@ function App() {
   }, [lastMessage]);
 
   const handleStartDemo = async () => {
-    const res = await fetch(`${getApiUrl()}/start-demo`, { method: 'POST' });
-    const data = await res.json();
-    setDemoStartTime(data.startTime);
+    try {
+      setError(null);
+      const res = await fetch(`${getApiUrl()}/start-demo`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const data = await res.json();
+      setDemoStartTime(data.startTime);
+    } catch (err) {
+      setError('Failed to start demo. Check server connection.');
+    }
   };
 
   const handleResetDemo = async () => {
-    const res = await fetch(`${getApiUrl()}/reset-demo`, { method: 'POST' });
-    const data = await res.json();
-    setDemoStartTime(data.startTime);
+    try {
+      setError(null);
+      const res = await fetch(`${getApiUrl()}/reset-demo`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const data = await res.json();
+      setDemoStartTime(data.startTime);
+    } catch (err) {
+      setError('Failed to reset demo. Check server connection.');
+    }
   };
 
   return (
@@ -116,12 +129,21 @@ function App() {
       <div className="min-h-screen bg-white">
         <Header
           isConnected={isConnected}
+          reconnecting={reconnecting}
           demoStartTime={demoStartTime}
           onStartDemo={handleStartDemo}
           onResetDemo={handleResetDemo}
           teamView={teamView}
           setTeamView={setTeamView}
         />
+        {error && (
+          <div className="bg-red-50 border-b border-red-200 px-8 py-3 flex items-center justify-between">
+            <span className="text-sm text-red-700">{error}</span>
+            <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700 text-sm font-medium">
+              Dismiss
+            </button>
+          </div>
+        )}
         <StatsBanner useCases={useCases} teamView={teamView} attacks={attacks} detections={detections} />
         <Routes>
           <Route path="/" element={

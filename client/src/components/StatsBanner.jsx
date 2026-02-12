@@ -1,8 +1,14 @@
 export function StatsBanner({ useCases, teamView, attacks, detections }) {
   // Blue Team stats
   const completedCount = Object.values(useCases).filter(uc => uc.completed).length;
-  const productsCount = (useCases.mfaLogin.completed ? 3 : 0) + (useCases.groupAssignment.completed ? 2 : 0);
-  const pillarsCount = (useCases.mfaLogin.completed ? 1 : 0) + (useCases.groupAssignment.completed ? 1 : 0);
+  const itpCompleted = [
+    useCases.itpSessionAnomaly,
+    useCases.itpRiskElevation,
+    useCases.itpImpossibleTravel,
+    useCases.itpUniversalLogout
+  ].some(uc => uc?.completed);
+  const productsCount = (useCases.mfaLogin.completed ? 3 : 0) + (useCases.groupAssignment.completed ? 2 : 0) + (itpCompleted ? 2 : 0);
+  const pillarsCount = (useCases.mfaLogin.completed ? 1 : 0) + (useCases.groupAssignment.completed ? 1 : 0) + (itpCompleted ? 1 : 0);
 
   // Red Team stats
   const attacksLaunched = attacks?.length || 0;

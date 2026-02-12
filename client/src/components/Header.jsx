@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 
-export function Header({ isConnected, demoStartTime, onStartDemo, onResetDemo, teamView, setTeamView }) {
+export function Header({ isConnected, reconnecting, demoStartTime, onStartDemo, onResetDemo, teamView, setTeamView }) {
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -62,8 +62,14 @@ export function Header({ isConnected, demoStartTime, onStartDemo, onResetDemo, t
           </button>
           <div className="h-6 w-px bg-gray-200 mx-1"></div>
           <div className="flex items-center gap-2">
-            <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-            <span className="text-xs text-okta-medium-gray font-medium">{isConnected ? 'Connected' : 'Disconnected'}</span>
+            <div className={`w-2.5 h-2.5 rounded-full ${
+              isConnected ? 'bg-green-500 animate-pulse' :
+              reconnecting ? 'bg-yellow-500 animate-pulse' :
+              'bg-red-500'
+            }`}></div>
+            <span className="text-xs text-okta-medium-gray font-medium">
+              {isConnected ? 'Connected' : reconnecting ? 'Reconnecting...' : 'Disconnected'}
+            </span>
           </div>
         </div>
       </div>

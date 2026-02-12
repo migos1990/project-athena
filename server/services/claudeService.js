@@ -8,6 +8,16 @@ const client = new Anthropic({
 const narrativeCache = new Map(); // Key: transactionId, Value: { narrative, businessOutcomes, cachedAt }
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
+// Cleanup expired cache entries every 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of narrativeCache) {
+    if (now - value.cachedAt > CACHE_TTL) {
+      narrativeCache.delete(key);
+    }
+  }
+}, 30 * 60 * 1000);
+
 // Usage tracking (safety limits)
 const usageStats = {
   totalCalls: 0,
@@ -172,11 +182,35 @@ ${JSON.stringify(events, null, 2)}
 }
 
 function parseClaudeResponse(text) {
-  // Extract JSON from Claude's response (handles markdown code blocks)
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    return JSON.parse(jsonMatch[0]);
+  // 1. Try parsing the entire response as JSON
+  try {
+    return JSON.parse(text.trim());
+  } catch {}
+
+  // 2. Try extracting from markdown code block
+  const codeBlockMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (codeBlockMatch) {
+    try {
+      return JSON.parse(codeBlockMatch[1]);
+    } catch {}
   }
+
+  // 3. Fall back to finding balanced braces
+  const startIdx = text.indexOf('{');
+  if (startIdx !== -1) {
+    let depth = 0;
+    for (let i = startIdx; i < text.length; i++) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}') depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.substring(startIdx, i + 1));
+        } catch {}
+        break;
+      }
+    }
+  }
+
   throw new Error('Failed to parse Claude response');
 }
 
@@ -199,6 +233,42 @@ function generateFallbackNarrative(identifiedUseCase = 'unknown') {
       narrative: 'Automated group membership assignment based on user attributes. Zero manual intervention required, reducing provisioning time from hours to seconds.',
       businessOutcomes: [
         { icon: '⚡', category: 'Efficiency Improved', description: 'Automated provisioning eliminated manual workflow' }
+      ]
+    },
+    itpSessionAnomaly: {
+      identifiedUseCase: 'itpSessionAnomaly',
+      cardTitle: 'ITP: Session Context Change Detected',
+      cardDescription: 'Anomalous session behavior detected and flagged for review',
+      narrative: 'A session context change was detected indicating potential session compromise. The system identified anomalous behavior patterns such as IP or device changes during an active session, triggering enhanced monitoring.',
+      businessOutcomes: [
+        { icon: '🚨', category: 'Threat Blocked', description: 'Session anomaly detected before data exfiltration' }
+      ]
+    },
+    itpRiskElevation: {
+      identifiedUseCase: 'itpRiskElevation',
+      cardTitle: 'ITP: User Risk Level Elevated',
+      cardDescription: 'Suspicious behavior elevated user risk score triggering additional controls',
+      narrative: 'User risk level was elevated due to suspicious behavioral signals. Identity Threat Protection analyzed multiple risk factors and automatically enforced additional security controls to protect the account.',
+      businessOutcomes: [
+        { icon: '📊', category: 'Risk Reduced', description: 'Behavioral analytics prevented potential account takeover' }
+      ]
+    },
+    itpImpossibleTravel: {
+      identifiedUseCase: 'itpImpossibleTravel',
+      cardTitle: 'ITP: Impossible Travel Detected',
+      cardDescription: 'Login from geographically impossible location blocked',
+      narrative: 'An impossible travel event was detected when login attempts occurred from two distant geographic locations within an impossibly short timeframe, indicating potential credential compromise or session hijacking.',
+      businessOutcomes: [
+        { icon: '🛡️', category: 'Threat Blocked', description: 'Credential theft blocked via geographic anomaly detection' }
+      ]
+    },
+    itpUniversalLogout: {
+      identifiedUseCase: 'itpUniversalLogout',
+      cardTitle: 'ITP: Universal Logout Triggered',
+      cardDescription: 'High-risk activity triggered immediate session termination across all applications',
+      narrative: 'Universal Logout was triggered after high-risk behavioral signals were detected. All active sessions for the user were immediately terminated across all connected applications, preventing potential lateral movement.',
+      businessOutcomes: [
+        { icon: '🚨', category: 'Threat Blocked', description: 'All sessions terminated preventing lateral movement' }
       ]
     }
   };
