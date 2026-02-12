@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 export function UseCaseCard({
   icon = '🔐',
@@ -11,11 +11,61 @@ export function UseCaseCard({
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // Typewriter state
+  const [displayedText, setDisplayedText] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [showOutcomes, setShowOutcomes] = useState(false);
+  const hasAnimated = useRef(false);
+  const prevNarrative = useRef('');
+
   // Extract Claude-generated content (falls back to props if not completed)
   const cardTitle = generatedContent?.cardTitle || title;
   const cardDescription = generatedContent?.cardDescription || description;
   const narrative = generatedContent?.narrative || '';
   const businessOutcomes = generatedContent?.businessOutcomes || [];
+
+  // Typewriter effect: animate narrative text when it first appears
+  useEffect(() => {
+    // Only animate when narrative transitions from empty to populated
+    if (narrative && !prevNarrative.current && !hasAnimated.current) {
+      hasAnimated.current = true;
+      setIsTyping(true);
+      setShowOutcomes(false);
+      let i = 0;
+      const interval = setInterval(() => {
+        i++;
+        setDisplayedText(narrative.slice(0, i));
+        if (i >= narrative.length) {
+          clearInterval(interval);
+          setIsTyping(false);
+          // Stagger business outcomes after typing completes
+          setTimeout(() => setShowOutcomes(true), 300);
+        }
+      }, 12);
+      prevNarrative.current = narrative;
+      return () => clearInterval(interval);
+    }
+
+    // If narrative was already present (re-render, team switch), show immediately
+    if (narrative && hasAnimated.current) {
+      setDisplayedText(narrative);
+      setIsTyping(false);
+      setShowOutcomes(true);
+    }
+
+    prevNarrative.current = narrative;
+  }, [narrative]);
+
+  // Reset animation state when card resets (demo reset)
+  useEffect(() => {
+    if (!completed) {
+      hasAnimated.current = false;
+      prevNarrative.current = '';
+      setDisplayedText('');
+      setIsTyping(false);
+      setShowOutcomes(false);
+    }
+  }, [completed]);
 
   // Format event data for display
   const getEventSummary = () => {
@@ -84,7 +134,19 @@ export function UseCaseCard({
         </div>
       )}
 
-      {/* ===== NEW: Claude-Generated AI Insights Section ===== */}
+      {/* ===== AI Loading State: shown when completed but Claude hasn't responded yet ===== */}
+      {completed && !narrative && (
+        <div className="fade-slide-up mt-4 p-4 rounded-lg bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200">
+          <div className="flex items-center gap-2">
+            <span className="text-lg animate-pulse">🤖</span>
+            <span className="text-xs font-semibold text-purple-700 animate-pulse tracking-wide">
+              Analyzing event with Claude AI...
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ===== AI-Generated Insights with Typewriter Effect ===== */}
       {completed && narrative && (
         <div className="fade-slide-up mt-4 p-4 rounded-lg bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200">
           {/* Header with AI badge */}
@@ -98,18 +160,20 @@ export function UseCaseCard({
             </span>
           </div>
 
-          {/* AI-generated narrative */}
+          {/* AI-generated narrative with typewriter */}
           <p className="text-xs text-gray-700 leading-relaxed mb-3">
-            {narrative}
+            {displayedText || narrative}
+            {isTyping && <span className="typing-cursor">|</span>}
           </p>
 
-          {/* AI-generated business outcomes */}
-          {businessOutcomes.length > 0 && (
+          {/* AI-generated business outcomes (fade in after typing) */}
+          {businessOutcomes.length > 0 && showOutcomes && (
             <div className="flex flex-wrap gap-2">
               {businessOutcomes.map((outcome, idx) => (
                 <div
                   key={idx}
-                  className="text-xs bg-white px-3 py-1.5 rounded-full border border-purple-200 flex items-center gap-1.5 shadow-sm"
+                  className="text-xs bg-white px-3 py-1.5 rounded-full border border-purple-200 flex items-center gap-1.5 shadow-sm fade-slide-up"
+                  style={{ animationDelay: `${idx * 0.15}s` }}
                 >
                   <span>{outcome.icon}</span>
                   <span className="font-semibold text-gray-700">{outcome.category}:</span>
