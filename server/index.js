@@ -1,10 +1,19 @@
 require('dotenv').config();
 
+// Validate environment before anything else — fail fast on missing vars
+const { validateEnv } = require('./config/validateEnv');
+validateEnv();
+
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { WebSocketServer } = require('ws');
 const http = require('http');
 const { generateUseCaseNarrative } = require('./services/claudeService');
+const { requireApiKey } = require('./middleware/auth');
+const { validate, attackSchema } = require('./middleware/validate');
 
 const app = express();
 
@@ -19,9 +28,52 @@ const KNOWN_USE_CASES = [
 ];
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// ─── Security middleware ──────────────────────────────────────────────────────
+
+// Helmet: sets secure HTTP response headers (CSP, HSTS, X-Frame-Options, etc.)
+app.use(helmet());
+
+// CORS: only allow explicitly configured origins
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:5173'];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, Postman, same-origin)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin '${origin}' not allowed`));
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-API-Key']
+}));
+
+// Global rate limiter: 200 requests per 15 minutes per IP
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please slow down' }
+});
+
+// Strict limiter for /attack: 10 per minute per IP
+const attackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Attack rate limit exceeded (10/min)' }
+});
+
+app.use(globalLimiter);
+
+// Capture raw body for Okta HMAC signature verification
+app.use(express.json({
+  limit: '100kb',
+  verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
 
 // Demo state
 let demoStartTime = null;
@@ -185,7 +237,7 @@ app.get('/health', (req, res) => {
 });
 
 // Start demo (timestamp gate)
-app.post('/start-demo', (req, res) => {
+app.post('/start-demo', requireApiKey, (req, res) => {
   demoStartTime = new Date().toISOString();
   useCaseStates = {
     mfaLogin: { completed: false, data: null, generatedContent: null },
@@ -219,7 +271,7 @@ app.post('/start-demo', (req, res) => {
 });
 
 // Reset demo
-app.post('/reset-demo', (req, res) => {
+app.post('/reset-demo', requireApiKey, (req, res) => {
   demoStartTime = new Date().toISOString();
   useCaseStates = {
     mfaLogin: { completed: false, data: null, generatedContent: null },
@@ -253,12 +305,8 @@ app.post('/reset-demo', (req, res) => {
 });
 
 // Red Team attack endpoint
-app.post('/attack', (req, res) => {
+app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), (req, res) => {
   const { attackType } = req.body;
-
-  if (!attackType) {
-    return res.status(400).json({ error: 'attackType is required' });
-  }
 
   const timestamp = new Date().toISOString();
   const attack = {
@@ -329,10 +377,39 @@ app.post('/attack', (req, res) => {
   res.json({ success: true, attack });
 });
 
-// Debug: expose raw webhook log
-app.get('/debug-log', (req, res) => {
+// Debug: expose raw webhook log (admin only — requires API key)
+app.get('/debug-log', requireApiKey, (req, res) => {
   res.json(webhookLog);
 });
+
+// ─── Okta HMAC signature validation helper ────────────────────────────────────
+// Okta signs the raw request body with HMAC-SHA256 using the Event Hook secret.
+// If OKTA_WEBHOOK_SECRET is configured we enforce the signature on POST requests.
+function verifyOktaSignature(req) {
+  const secret = process.env.OKTA_WEBHOOK_SECRET;
+  if (!secret) return true; // Skip in dev when secret not configured
+
+  const signature = req.headers['x-okta-request-signature'];
+  if (!signature) return false;
+
+  const rawBody = req.rawBody; // set by express.json verify callback (see below)
+  if (!rawBody) return false;
+
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('base64');
+
+  // Timing-safe comparison to prevent timing attacks
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(expected)
+    );
+  } catch {
+    return false;
+  }
+}
 
 // Okta Event Hook webhook
 app.all('/webhook', (req, res) => {
@@ -345,7 +422,7 @@ app.all('/webhook', (req, res) => {
   });
   if (webhookLog.length > 100) webhookLog.shift();
 
-  // GET = Verification handshake
+  // GET = Verification handshake (no signature on challenge requests)
   if (req.method === 'GET') {
     const challenge = req.headers['x-okta-verification-challenge'];
     if (challenge) {
@@ -357,6 +434,12 @@ app.all('/webhook', (req, res) => {
 
   // POST = Event delivery
   if (req.method === 'POST') {
+    // Enforce HMAC signature when secret is configured
+    if (!verifyOktaSignature(req)) {
+      console.warn('⚠️  Webhook: invalid or missing Okta HMAC signature — rejected');
+      return res.status(403).json({ error: 'Invalid webhook signature' });
+    }
+
     // Respond immediately (Okta has 3-second timeout)
     res.status(200).send();
 
@@ -814,11 +897,23 @@ function handleUniversalLogout(data, fullEvent) {
   })();
 }
 
+// Global error handler — catches CORS errors and other unhandled middleware errors
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err.message && err.message.startsWith('CORS:')) {
+    return res.status(403).json({ error: err.message });
+  }
+  console.error('Unhandled error:', err.message);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`WebSocket available at ws://localhost:${PORT}`);
   console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
+  console.log(`Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+  console.log(`Okta HMAC validation: ${process.env.OKTA_WEBHOOK_SECRET ? '✅ enabled' : '⚠️  disabled (OKTA_WEBHOOK_SECRET not set)'}`);
 });
 
 // Graceful shutdown
