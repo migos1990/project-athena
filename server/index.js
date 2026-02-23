@@ -14,6 +14,7 @@ const http = require('http');
 const { generateUseCaseNarrative } = require('./services/claudeService');
 const { requireApiKey } = require('./middleware/auth');
 const { validate, attackSchema } = require('./middleware/validate');
+const { initDb, demos: demosRepo, events: eventsRepo, useCases: useCasesRepo, attacks: attacksRepo, audit } = require('./db');
 
 const app = express();
 
@@ -153,8 +154,12 @@ const ATTACK_DETECTIONS = {
 // Stores whichever of session.start / auth_via_mfa arrives first
 let pendingMfaEvents = new Map();
 
-// Deduplicate Okta events by UUID (Okta may retry delivery)
+// In-memory fallback for event deduplication when DB is unavailable
+// Primary deduplication now goes through eventsRepo.isDuplicate()
 const processedEventUUIDs = new Set();
+
+// Currently active demo ID (set on start/reset, used for all DB writes)
+let currentDemoId = null;
 
 // Raw webhook log for debugging — captures every request hitting /webhook (capped at 100)
 const webhookLog = [];
@@ -237,75 +242,102 @@ app.get('/health', (req, res) => {
 });
 
 // Start demo (timestamp gate)
-app.post('/start-demo', requireApiKey, (req, res) => {
-  demoStartTime = new Date().toISOString();
-  useCaseStates = {
-    mfaLogin: { completed: false, data: null, generatedContent: null },
-    groupAssignment: { completed: false, data: null, generatedContent: null },
-    itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
-    itpRiskElevation: { completed: false, data: null, generatedContent: null },
-    itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
-    itpUniversalLogout: { completed: false, data: null, generatedContent: null }
-  };
-  attackLog = [];
-  detectionStates = {
-    partiallyOffboarded: { completed: false, data: null },
-    unmanagedServiceAccount: { completed: false, data: null },
-    weakPasswordPolicy: { completed: false, data: null },
-    ssoBypass: { completed: false, data: null }
-  };
-  pendingMfaEvents.clear();
-  processedEventUUIDs.clear();
+app.post('/start-demo', requireApiKey, async (req, res) => {
+  try {
+    demoStartTime = new Date().toISOString();
+    useCaseStates = {
+      mfaLogin: { completed: false, data: null, generatedContent: null },
+      groupAssignment: { completed: false, data: null, generatedContent: null },
+      itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
+      itpRiskElevation: { completed: false, data: null, generatedContent: null },
+      itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
+      itpUniversalLogout: { completed: false, data: null, generatedContent: null }
+    };
+    attackLog = [];
+    detectionStates = {
+      partiallyOffboarded: { completed: false, data: null },
+      unmanagedServiceAccount: { completed: false, data: null },
+      weakPasswordPolicy: { completed: false, data: null },
+      ssoBypass: { completed: false, data: null }
+    };
+    pendingMfaEvents.clear();
+    processedEventUUIDs.clear();
 
-  console.log(`Demo started at ${demoStartTime}`);
+    // Persist new demo to database
+    const demo = await demosRepo.createDemo({ createdBy: 'api-key' });
+    await demosRepo.markStarted(demo.id);
+    currentDemoId = demo.id;
 
-  broadcast({
-    type: 'DEMO_STARTED',
-    startTime: demoStartTime,
-    useCaseStates,
-    detectionStates,
-    attacks: attackLog
-  });
+    await audit.log({ actor: 'api-key', action: 'start_demo', resource: demo.id, result: 'success' });
+    console.log(`Demo started at ${demoStartTime} (id: ${currentDemoId})`);
 
-  res.json({ startTime: demoStartTime });
+    broadcast({
+      type: 'DEMO_STARTED',
+      startTime: demoStartTime,
+      useCaseStates,
+      detectionStates,
+      attacks: attackLog
+    });
+
+    res.json({ startTime: demoStartTime, demoId: currentDemoId });
+  } catch (err) {
+    console.error('start-demo error:', err.message);
+    res.status(500).json({ error: 'Failed to start demo' });
+  }
 });
 
 // Reset demo
-app.post('/reset-demo', requireApiKey, (req, res) => {
-  demoStartTime = new Date().toISOString();
-  useCaseStates = {
-    mfaLogin: { completed: false, data: null, generatedContent: null },
-    groupAssignment: { completed: false, data: null, generatedContent: null },
-    itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
-    itpRiskElevation: { completed: false, data: null, generatedContent: null },
-    itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
-    itpUniversalLogout: { completed: false, data: null, generatedContent: null }
-  };
-  attackLog = [];
-  detectionStates = {
-    partiallyOffboarded: { completed: false, data: null },
-    unmanagedServiceAccount: { completed: false, data: null },
-    weakPasswordPolicy: { completed: false, data: null },
-    ssoBypass: { completed: false, data: null }
-  };
-  pendingMfaEvents.clear();
-  processedEventUUIDs.clear();
+app.post('/reset-demo', requireApiKey, async (req, res) => {
+  try {
+    // Mark old demo as reset in DB
+    if (currentDemoId) {
+      await demosRepo.markReset(currentDemoId);
+    }
 
-  console.log(`Demo reset at ${demoStartTime}`);
+    demoStartTime = new Date().toISOString();
+    useCaseStates = {
+      mfaLogin: { completed: false, data: null, generatedContent: null },
+      groupAssignment: { completed: false, data: null, generatedContent: null },
+      itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
+      itpRiskElevation: { completed: false, data: null, generatedContent: null },
+      itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
+      itpUniversalLogout: { completed: false, data: null, generatedContent: null }
+    };
+    attackLog = [];
+    detectionStates = {
+      partiallyOffboarded: { completed: false, data: null },
+      unmanagedServiceAccount: { completed: false, data: null },
+      weakPasswordPolicy: { completed: false, data: null },
+      ssoBypass: { completed: false, data: null }
+    };
+    pendingMfaEvents.clear();
+    processedEventUUIDs.clear();
 
-  broadcast({
-    type: 'DEMO_RESET',
-    startTime: demoStartTime,
-    useCaseStates,
-    detectionStates,
-    attacks: attackLog
-  });
+    // Create a fresh demo record for the new session
+    const demo = await demosRepo.createDemo({ createdBy: 'api-key' });
+    await demosRepo.markStarted(demo.id);
+    currentDemoId = demo.id;
 
-  res.json({ startTime: demoStartTime });
+    await audit.log({ actor: 'api-key', action: 'reset_demo', resource: currentDemoId, result: 'success' });
+    console.log(`Demo reset at ${demoStartTime} (id: ${currentDemoId})`);
+
+    broadcast({
+      type: 'DEMO_RESET',
+      startTime: demoStartTime,
+      useCaseStates,
+      detectionStates,
+      attacks: attackLog
+    });
+
+    res.json({ startTime: demoStartTime, demoId: currentDemoId });
+  } catch (err) {
+    console.error('reset-demo error:', err.message);
+    res.status(500).json({ error: 'Failed to reset demo' });
+  }
 });
 
 // Red Team attack endpoint
-app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), (req, res) => {
+app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), async (req, res) => {
   const { attackType } = req.body;
 
   const timestamp = new Date().toISOString();
@@ -315,9 +347,24 @@ app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), (req, 
     id: `attack-${Date.now()}`
   };
 
-  // Add to attack log (capped at 100 entries)
+  // Add to in-memory attack log (capped at 100 entries)
   attackLog.unshift(attack);
   if (attackLog.length > 100) attackLog.pop();
+
+  // Persist attack to database
+  let dbAttackId = null;
+  try {
+    const mapping = ATTACK_DETECTIONS[attackType];
+    dbAttackId = await attacksRepo.recordAttack({
+      demoId: currentDemoId,
+      attackType,
+      targetUseCase: mapping?.targetIds?.[0] || null
+    });
+    await audit.log({ actor: 'api-key', action: 'launch_attack', resource: attackType, result: 'success', details: { attackId: dbAttackId } });
+  } catch (err) {
+    console.error('DB: failed to persist attack:', err.message);
+    // Non-fatal — continue with in-memory operation
+  }
 
   // Broadcast attack launched
   broadcast({
@@ -332,8 +379,8 @@ app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), (req, 
   if (attackMapping && attackMapping.targetIds && attackMapping.targetIds.length > 0) {
     const delay = 1500 + Math.random() * 1500; // 1.5-3 seconds
 
-    setTimeout(() => {
-      attackMapping.targetIds.forEach(targetId => {
+    setTimeout(async () => {
+      attackMapping.targetIds.forEach(async (targetId) => {
         const enrichedData = {
           ...attackMapping.data,
           detectedAt: new Date().toISOString()
@@ -346,6 +393,14 @@ app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), (req, 
             data: enrichedData,
             generatedContent: null // No Claude AI for simulated attacks
           };
+
+          // Persist use case completion
+          try {
+            await useCasesRepo.recordUseCase({ demoId: currentDemoId, type: targetId, eventData: enrichedData });
+            if (dbAttackId) await attacksRepo.markDetected(dbAttackId);
+          } catch (err) {
+            console.error('DB: failed to persist use case:', err.message);
+          }
 
           broadcast({
             type: 'USE_CASE_COMPLETED',
@@ -361,6 +416,14 @@ app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), (req, 
             completed: true,
             data: enrichedData
           };
+
+          // Persist detection
+          try {
+            await useCasesRepo.recordUseCase({ demoId: currentDemoId, type: `detection:${targetId}`, eventData: enrichedData });
+            if (dbAttackId) await attacksRepo.markDetected(dbAttackId);
+          } catch (err) {
+            console.error('DB: failed to persist detection:', err.message);
+          }
 
           broadcast({
             type: 'DETECTION_FOUND',
@@ -450,30 +513,48 @@ app.all('/webhook', (req, res) => {
 });
 
 // Process Okta events (with error handling)
-function processEvents(events) {
+async function processEvents(events) {
   if (!Array.isArray(events)) {
     console.log('⚠️  Invalid payload: events is not an array');
     return;
   }
 
-  events.forEach(event => {
+  for (const event of events) {
     try {
       if (!event || !event.eventType) {
         console.log('⚠️  Skipped malformed event (missing eventType)');
         return;
       }
 
-      // Deduplicate by event UUID
-      if (event.uuid && processedEventUUIDs.has(event.uuid)) {
-        console.log(`  → Skipped duplicate event (uuid: ${event.uuid})`);
-        return;
-      }
+      // Deduplicate by event UUID — check DB first, fall back to in-memory Set
       if (event.uuid) {
-        processedEventUUIDs.add(event.uuid);
-        // Cap at 1000 entries to prevent unbounded growth
-        if (processedEventUUIDs.size > 1000) {
-          const first = processedEventUUIDs.values().next().value;
-          processedEventUUIDs.delete(first);
+        let isDup = false;
+        try {
+          isDup = await eventsRepo.isDuplicate(event.uuid);
+        } catch {
+          // DB unavailable — fall back to in-memory check
+          isDup = processedEventUUIDs.has(event.uuid);
+        }
+        if (isDup) {
+          console.log(`  → Skipped duplicate event (uuid: ${event.uuid})`);
+          return;
+        }
+        // Mark as processed in both stores
+        try {
+          await eventsRepo.recordEvent({
+            demoId: currentDemoId,
+            oktaUuid: event.uuid,
+            eventType: event.eventType,
+            eventTimestamp: event.published,
+            eventData: event
+          });
+        } catch {
+          // Fall back to in-memory deduplication
+          processedEventUUIDs.add(event.uuid);
+          if (processedEventUUIDs.size > 1000) {
+            const first = processedEventUUIDs.values().next().value;
+            processedEventUUIDs.delete(first);
+          }
         }
       }
 
@@ -538,7 +619,7 @@ function processEvents(events) {
     } catch (err) {
       console.error(`⚠️  Error processing event: ${err.message}`);
     }
-  });
+  }
 }
 
 // Check if event should be processed
@@ -907,14 +988,23 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`WebSocket available at ws://localhost:${PORT}`);
-  console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
-  console.log(`Allowed CORS origins: ${allowedOrigins.join(', ')}`);
-  console.log(`Okta HMAC validation: ${process.env.OKTA_WEBHOOK_SECRET ? '✅ enabled' : '⚠️  disabled (OKTA_WEBHOOK_SECRET not set)'}`);
-});
+// Start server — run DB migrations first, then open port
+(async () => {
+  try {
+    await initDb();
+  } catch (err) {
+    console.error('Failed to initialise database — exiting');
+    process.exit(1);
+  }
+
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`WebSocket available at ws://localhost:${PORT}`);
+    console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
+    console.log(`Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+    console.log(`Okta HMAC validation: ${process.env.OKTA_WEBHOOK_SECRET ? '✅ enabled' : '⚠️  disabled (OKTA_WEBHOOK_SECRET not set)'}`);
+  });
+})();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
