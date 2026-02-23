@@ -4,6 +4,7 @@ import { PROVIDERS, PROVIDER_LIST } from '../../config/providers';
 import { EventGrid } from './EventGrid';
 import { ActivityLog } from './ActivityLog';
 import { generateKeyPair } from '../../utils/crypto';
+import { CopyButton } from './CopyButton';
 
 const API_KEY = import.meta.env.VITE_DEMO_API_KEY || '';
 
@@ -278,12 +279,18 @@ export function SSFDashboard() {
                   <div className="mt-3 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] ssf-text-muted">Key ID</span>
-                      <code className="text-[10px] font-mono ssf-text-primary truncate max-w-[120px]" title={keys.kid}>{keys.kid}</code>
+                      <CopyButton text={keys.kid} label="Key ID" compact dark />
                     </div>
-                    <div className="ssf-code-block rounded-lg p-3 max-h-32 overflow-y-auto">
-                      <pre className="text-[10px] font-mono ssf-text-secondary whitespace-pre-wrap break-all">
-                        {JSON.stringify({ keys: [keys.publicJwk] }, null, 2)}
-                      </pre>
+                    <code className="block text-[10px] font-mono ssf-text-primary truncate w-full" title={keys.kid}>{keys.kid}</code>
+                    <div className="relative">
+                      <div className="ssf-code-block rounded-lg p-3 max-h-32 overflow-y-auto">
+                        <pre className="text-[10px] font-mono ssf-text-secondary whitespace-pre-wrap break-all">
+                          {JSON.stringify({ keys: [keys.publicJwk] }, null, 2)}
+                        </pre>
+                      </div>
+                      <div className="absolute top-2 right-2">
+                        <CopyButton text={JSON.stringify({ keys: [keys.publicJwk] }, null, 2)} label="JWKS" compact dark />
+                      </div>
                     </div>
                     <button
                       onClick={handleExportJWKS}
@@ -291,6 +298,25 @@ export function SSFDashboard() {
                     >
                       Export JWKS JSON
                     </button>
+                    {/* JWKS hosting tip */}
+                    <details className="group">
+                      <summary className="cursor-pointer text-[11px] ssf-text-muted flex items-center gap-1 hover:ssf-text-primary list-none">
+                        <svg className="w-3 h-3 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                        </svg>
+                        How to host your JWKS
+                      </summary>
+                      <div className="mt-2 text-[10px] ssf-text-muted space-y-1 leading-relaxed p-2 rounded-lg" style={{ backgroundColor: 'rgba(22,98,221,0.08)', border: '1px solid rgba(22,98,221,0.2)' }}>
+                        <p className="font-medium" style={{ color: '#6ea7ff' }}>Use npoint.io to quickly host your JWKS:</p>
+                        <ol className="list-decimal list-inside space-y-1 pl-1">
+                          <li>Go to npoint.io → &quot;Create JSON Bin&quot;</li>
+                          <li>Paste the JWKS JSON above and save</li>
+                          <li>Copy the API endpoint URL</li>
+                          <li>Use this URL in your Okta SSF stream config</li>
+                        </ol>
+                        <p className="opacity-60">Note: GitHub Gists won&apos;t work — incorrect Content-Type.</p>
+                      </div>
+                    </details>
                   </div>
                 )}
               </div>
@@ -339,9 +365,12 @@ export function SSFDashboard() {
                       </svg>
                       Transmitted Payload
                     </h3>
-                    <button onClick={() => setShowPayload(false)} className="text-xs ssf-text-muted hover:opacity-70">
-                      Hide
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <CopyButton text={JSON.stringify(lastPayload, null, 2)} label="Payload" dark />
+                      <button onClick={() => setShowPayload(false)} className="text-xs ssf-text-muted hover:opacity-70">
+                        Hide
+                      </button>
+                    </div>
                   </div>
                   <div className="ssf-code-block rounded-lg p-3 max-h-48 overflow-y-auto">
                     <pre className="text-[10px] font-mono ssf-text-secondary whitespace-pre-wrap">

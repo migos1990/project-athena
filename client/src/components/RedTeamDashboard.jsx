@@ -5,6 +5,7 @@ import { PROVIDERS, PROVIDER_LIST } from '../config/providers';
 import { EventGrid } from './SSF/EventGrid';
 import { PillarSection } from './PillarSection';
 import { generateKeyPair } from '../utils/crypto';
+import { CopyButton } from './SSF/CopyButton';
 
 const API_KEY = import.meta.env.VITE_DEMO_API_KEY || '';
 
@@ -320,19 +321,46 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
                     <div className="mt-3 space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-okta-medium-gray">Key ID</span>
-                        <code className="text-[10px] font-mono text-okta-dark truncate max-w-[120px]" title={keys.kid}>{keys.kid}</code>
+                        <CopyButton text={keys.kid} label="Key ID" compact />
                       </div>
-                      <div className="bg-gray-900 rounded-lg p-3 max-h-28 overflow-y-auto">
-                        <pre className="text-[10px] font-mono text-gray-300 whitespace-pre-wrap break-all">
-                          {JSON.stringify({ keys: [keys.publicJwk] }, null, 2)}
-                        </pre>
+                      <code className="block text-[10px] font-mono text-okta-dark truncate w-full" title={keys.kid}>{keys.kid}</code>
+                      <div className="relative">
+                        <div className="bg-gray-900 rounded-lg p-3 max-h-28 overflow-y-auto">
+                          <pre className="text-[10px] font-mono text-gray-300 whitespace-pre-wrap break-all">
+                            {JSON.stringify({ keys: [keys.publicJwk] }, null, 2)}
+                          </pre>
+                        </div>
+                        <div className="absolute top-2 right-2">
+                          <CopyButton text={JSON.stringify({ keys: [keys.publicJwk] }, null, 2)} label="JWKS" compact />
+                        </div>
                       </div>
-                      <button
-                        onClick={handleExportJWKS}
-                        className="w-full text-xs font-medium px-3 py-1.5 rounded-lg text-okta-medium-gray bg-white hover:bg-gray-100 transition-opacity border border-gray-300"
-                      >
-                        Export JWKS JSON
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleExportJWKS}
+                          className="flex-1 text-xs font-medium px-3 py-1.5 rounded-lg text-okta-medium-gray bg-white hover:bg-gray-100 transition-opacity border border-gray-300"
+                        >
+                          Export JWKS JSON
+                        </button>
+                      </div>
+                      {/* JWKS hosting tip — mirrors hackathon guidance */}
+                      <details className="group">
+                        <summary className="cursor-pointer text-[11px] text-okta-medium-gray flex items-center gap-1 hover:text-okta-dark list-none">
+                          <svg className="w-3.5 h-3.5 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                          </svg>
+                          How to host your JWKS
+                        </summary>
+                        <div className="mt-2 text-[11px] text-okta-medium-gray bg-blue-50 border border-blue-100 rounded-lg p-3 space-y-1.5 leading-relaxed">
+                          <p>Use <strong>npoint.io</strong> to quickly host your JWKS:</p>
+                          <ol className="list-decimal list-inside space-y-1 pl-1">
+                            <li>Go to <span className="font-mono text-okta-blue">npoint.io</span> → &quot;Create JSON Bin&quot;</li>
+                            <li>Paste the JWKS JSON above and save</li>
+                            <li>Copy the API endpoint URL (e.g. <span className="font-mono">https://api.npoint.io/abc123</span>)</li>
+                            <li>Use this as the JWKS URL in your Okta SSF stream config</li>
+                          </ol>
+                          <p className="text-[10px] text-gray-500">Note: GitHub Gists won&apos;t work — they return HTML, not JSON with the correct Content-Type.</p>
+                        </div>
+                      </details>
                     </div>
                   )}
                 </div>
@@ -417,9 +445,12 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
                         </svg>
                         Transmitted Payload
                       </h3>
-                      <button onClick={() => setShowPayload(false)} className="text-xs text-okta-medium-gray hover:text-okta-dark">
-                        Hide
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <CopyButton text={JSON.stringify(lastPayload, null, 2)} label="Payload" />
+                        <button onClick={() => setShowPayload(false)} className="text-xs text-okta-medium-gray hover:text-okta-dark">
+                          Hide
+                        </button>
+                      </div>
                     </div>
                     <div className="bg-gray-900 rounded-lg p-3 max-h-64 overflow-y-auto">
                       <pre className="text-[10px] font-mono text-gray-300 whitespace-pre-wrap">
