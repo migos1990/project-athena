@@ -1014,3 +1014,6 @@ process.on('SIGTERM', () => {
   wss.close();
   server.close();
 });
+
+// Export for testing — supertest binds its own ephemeral port
+module.exports = { app, server };
