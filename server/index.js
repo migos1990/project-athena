@@ -15,6 +15,14 @@ const { generateUseCaseNarrative } = require('./services/claudeService');
 const { requireApiKey } = require('./middleware/auth');
 const { validate, attackSchema } = require('./middleware/validate');
 const { initDb, demos: demosRepo, events: eventsRepo, useCases: useCasesRepo, attacks: attacksRepo, audit } = require('./db');
+const logger = require('./config/logger');
+
+// Redirect all console.* calls through Pino so existing call sites emit
+// structured JSON in production without requiring individual rewrites.
+// Phase 6 improvement: migrate each call site to use logger directly.
+console.log   = (...args) => logger.info(args.join(' '));
+console.error = (...args) => logger.error(args.join(' '));
+console.warn  = (...args) => logger.warn(args.join(' '));
 
 const app = express();
 
@@ -174,7 +182,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
-  console.log('Client connected');
+  logger.info({ event: 'ws_connect', totalClients: clients.size + 1 }, 'WebSocket client connected');
   clients.add(ws);
   ws.isAlive = true;
 
@@ -192,12 +200,12 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    console.log('Client disconnected');
+    logger.info({ event: 'ws_disconnect', totalClients: clients.size - 1 }, 'WebSocket client disconnected');
     clients.delete(ws);
   });
 
   ws.on('error', (err) => {
-    console.error('WebSocket error:', err.message);
+    logger.error({ event: 'ws_error', err: err.message }, 'WebSocket error');
     clients.delete(ws);
   });
 });
@@ -236,9 +244,94 @@ function broadcast(message) {
   });
 }
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', demoStartTime, useCaseStates });
+// In-memory metrics counters (reset on server restart)
+const metrics = {
+  requestsTotal: 0,
+  attacksLaunched: 0,
+  useCasesCompleted: 0,
+  webhookEventsReceived: 0,
+  claudeApiCallsTotal: 0,
+  serverStartTime: Date.now()
+};
+
+// Increment request counter for all non-metrics/health requests
+app.use((req, res, next) => {
+  if (req.path !== '/metrics' && req.path !== '/health' && req.path !== '/ready') {
+    metrics.requestsTotal++;
+  }
+  next();
+});
+
+// Health check — deep check (DB + WebSocket connectivity)
+app.get('/health', async (req, res) => {
+  const checks = { db: 'unknown', websocket: 'ok' };
+  let dbOk = false;
+
+  try {
+    const { db } = require('./db');
+    await db.raw('SELECT 1');
+    checks.db = 'ok';
+    dbOk = true;
+  } catch (err) {
+    checks.db = `error: ${err.message}`;
+  }
+
+  const status = dbOk ? 'ok' : 'degraded';
+  res.status(dbOk ? 200 : 503).json({
+    status,
+    checks,
+    demoStartTime,
+    currentDemoId,
+    websocketClients: clients.size,
+    uptime_seconds: Math.floor((Date.now() - metrics.serverStartTime) / 1000)
+  });
+});
+
+// Readiness probe — fails until migrations complete (used by Kubernetes)
+// Once the server boots and migrations run, this always returns 200.
+let isReady = false;
+app.get('/ready', (req, res) => {
+  if (isReady) {
+    return res.status(200).json({ ready: true });
+  }
+  res.status(503).json({ ready: false, reason: 'Waiting for database migrations' });
+});
+
+// Metrics endpoint — Prometheus-compatible text format
+app.get('/metrics', (req, res) => {
+  const uptime = Math.floor((Date.now() - metrics.serverStartTime) / 1000);
+  const text = [
+    '# HELP athena_requests_total Total HTTP requests processed',
+    '# TYPE athena_requests_total counter',
+    `athena_requests_total ${metrics.requestsTotal}`,
+    '',
+    '# HELP athena_attacks_launched_total Red Team attacks launched',
+    '# TYPE athena_attacks_launched_total counter',
+    `athena_attacks_launched_total ${metrics.attacksLaunched}`,
+    '',
+    '# HELP athena_use_cases_completed_total Use cases completed in demos',
+    '# TYPE athena_use_cases_completed_total counter',
+    `athena_use_cases_completed_total ${metrics.useCasesCompleted}`,
+    '',
+    '# HELP athena_webhook_events_received_total Okta webhook events received',
+    '# TYPE athena_webhook_events_received_total counter',
+    `athena_webhook_events_received_total ${metrics.webhookEventsReceived}`,
+    '',
+    '# HELP athena_claude_api_calls_total Claude API calls made',
+    '# TYPE athena_claude_api_calls_total counter',
+    `athena_claude_api_calls_total ${metrics.claudeApiCallsTotal}`,
+    '',
+    '# HELP athena_websocket_clients_current Current WebSocket connections',
+    '# TYPE athena_websocket_clients_current gauge',
+    `athena_websocket_clients_current ${clients.size}`,
+    '',
+    '# HELP athena_uptime_seconds Server uptime in seconds',
+    '# TYPE athena_uptime_seconds gauge',
+    `athena_uptime_seconds ${uptime}`,
+    ''
+  ].join('\n');
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+  res.send(text);
 });
 
 // Start demo (timestamp gate)
@@ -269,7 +362,7 @@ app.post('/start-demo', requireApiKey, async (req, res) => {
     currentDemoId = demo.id;
 
     await audit.log({ actor: 'api-key', action: 'start_demo', resource: demo.id, result: 'success' });
-    console.log(`Demo started at ${demoStartTime} (id: ${currentDemoId})`);
+    logger.info({ event: 'demo_started', demoId: currentDemoId, startTime: demoStartTime }, 'Demo started');
 
     broadcast({
       type: 'DEMO_STARTED',
@@ -372,7 +465,8 @@ app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), async 
     attack
   });
 
-  console.log(`🔴 Red Team attack launched: ${attackType}`);
+  metrics.attacksLaunched++;
+  logger.info({ event: 'attack_launched', attackType, attackId: attack.id }, `Red Team attack launched: ${attackType}`);
 
   // Trigger Blue Team detection/use case after delay (1.5-3 seconds)
   const attackMapping = ATTACK_DETECTIONS[attackType];
@@ -409,7 +503,8 @@ app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), async 
             generatedContent: null
           });
 
-          console.log(`🔵 Blue Team use case triggered: ${targetId}`);
+          metrics.useCasesCompleted++;
+          logger.info({ event: 'use_case_triggered', useCase: targetId, via: 'attack' }, `Blue Team use case triggered: ${targetId}`);
         } else {
           // Trigger ISPM detection (hub card)
           detectionStates[targetId] = {
@@ -497,9 +592,11 @@ app.all('/webhook', (req, res) => {
 
   // POST = Event delivery
   if (req.method === 'POST') {
+    metrics.webhookEventsReceived++;
+
     // Enforce HMAC signature when secret is configured
     if (!verifyOktaSignature(req)) {
-      console.warn('⚠️  Webhook: invalid or missing Okta HMAC signature — rejected');
+      logger.warn({ event: 'webhook_signature_invalid' }, 'Webhook: invalid or missing Okta HMAC signature — rejected');
       return res.status(403).json({ error: 'Invalid webhook signature' });
     }
 
@@ -992,17 +1089,20 @@ app.use((err, req, res, next) => {
 (async () => {
   try {
     await initDb();
+    isReady = true; // Signal readiness probe: migrations complete
   } catch (err) {
-    console.error('Failed to initialise database — exiting');
+    logger.error({ event: 'startup_failed', err: err.message }, 'Failed to initialise database — exiting');
     process.exit(1);
   }
 
   server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`WebSocket available at ws://localhost:${PORT}`);
-    console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
-    console.log(`Allowed CORS origins: ${allowedOrigins.join(', ')}`);
-    console.log(`Okta HMAC validation: ${process.env.OKTA_WEBHOOK_SECRET ? '✅ enabled' : '⚠️  disabled (OKTA_WEBHOOK_SECRET not set)'}`);
+    logger.info({
+      event: 'server_started',
+      port: PORT,
+      allowedOrigins,
+      hmacEnabled: Boolean(process.env.OKTA_WEBHOOK_SECRET),
+      nodeEnv: process.env.NODE_ENV || 'development'
+    }, `Project Athena server running on port ${PORT}`);
   });
 })();
 
