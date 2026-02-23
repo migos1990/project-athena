@@ -1,0 +1,74 @@
+version: "3.9"
+
+# ─── Project Athena — Local Development Stack ─────────────────────────────────
+# Start everything: docker compose up
+# Rebuild after code changes: docker compose up --build
+
+services:
+  # ── Backend Express + WebSocket server ──────────────────────────────────────
+  backend:
+    build:
+      context: ./server
+      target: final
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      # Required — copy .env.example to .env and fill in
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DEMO_API_KEY: ${DEMO_API_KEY}
+      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:80
+      OKTA_WEBHOOK_SECRET: ${OKTA_WEBHOOK_SECRET:-}
+      MAX_CLAUDE_CALLS_PER_HOUR: ${MAX_CLAUDE_CALLS_PER_HOUR:-100}
+      MAX_COST_PER_HOUR: ${MAX_COST_PER_HOUR:-1.00}
+      # In dev, use SQLite. For Postgres in docker: set DATABASE_URL below
+      # DATABASE_URL: postgres://athena:secret@postgres:5432/athena
+    volumes:
+      # Mount source for hot-reload in development
+      - ./server:/app
+      - /app/node_modules
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Frontend Vite dev server (development only) ──────────────────────────────
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: npm run dev -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    environment:
+      VITE_API_URL: http://localhost:3001
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── PostgreSQL (optional — swap in for SQLite in production-like local dev) ──
+  # Uncomment and set DATABASE_URL above to use PostgreSQL locally
+  # postgres:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_USER: athena
+  #     POSTGRES_PASSWORD: secret
+  #     POSTGRES_DB: athena
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U athena"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+# volumes:
+#   postgres_data:
