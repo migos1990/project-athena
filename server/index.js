@@ -13,7 +13,7 @@ const { WebSocketServer } = require('ws');
 const http = require('http');
 const { generateUseCaseNarrative } = require('./services/claudeService');
 const { requireApiKey } = require('./middleware/auth');
-const { validate, attackSchema } = require('./middleware/validate');
+const { validate, attackSchema, ssfTransmitSchema } = require('./middleware/validate');
 const { initDb, demos: demosRepo, events: eventsRepo, useCases: useCasesRepo, attacks: attacksRepo, audit } = require('./db');
 const logger = require('./config/logger');
 
@@ -74,6 +74,15 @@ const attackLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Attack rate limit exceeded (10/min)' }
+});
+
+// SSF transmit limiter: 20 per minute per IP
+const ssfLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'SSF transmit rate limit exceeded (20/min)' }
 });
 
 app.use(globalLimiter);
@@ -533,6 +542,158 @@ app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), async 
   }
 
   res.json({ success: true, attack });
+});
+
+// SSF Transmitter endpoint — signs a SET (Security Event Token) and transmits to Okta
+// The client builds the events payload using the provider config; this endpoint handles
+// RSA signing (node:crypto) and the actual HTTP POST to Okta's SSF endpoint.
+// Note: The private key PEM is transmitted from client to server solely for demo purposes.
+app.post('/ssf/transmit', requireApiKey, ssfLimiter, validate(ssfTransmitSchema), async (req, res) => {
+  const { oktaDomain, issuerUrl, subjectEmail, privateKeyPem, keyId, eventsPayload, providerName, eventLabel } = req.body;
+
+  try {
+    // 1. Sanitize and parse Okta domain
+    let inputDomain = oktaDomain.trim();
+    if (!inputDomain.startsWith('http')) {
+      inputDomain = `https://${inputDomain}`;
+    }
+
+    let oktaHost;
+    try {
+      oktaHost = new URL(inputDomain).hostname;
+    } catch {
+      return res.status(400).json({ success: false, error: `Invalid Okta domain: ${oktaDomain}` });
+    }
+
+    const tokenAudience = `https://${oktaHost}`;
+    const destinationEndpoint = `https://${oktaHost}/security/api/v1/security-events`;
+
+    // 2. Build the full JWT payload
+    const now = Math.floor(Date.now() / 1000);
+    const jti = crypto.randomUUID();
+    const payload = {
+      iss: issuerUrl,
+      iat: now,
+      jti,
+      aud: tokenAudience,
+      events: eventsPayload,
+    };
+
+    // 3. Sign as compact JWT (RS256) using node:crypto — no external dependency needed
+    const b64url = (input) => {
+      const str = typeof input === 'string' ? input : JSON.stringify(input);
+      return Buffer.from(str).toString('base64url');
+    };
+
+    const jwtHeader = { alg: 'RS256', kid: keyId, typ: 'secevent+jwt' };
+    const signingInput = `${b64url(jwtHeader)}.${b64url(payload)}`;
+
+    let privateKey;
+    try {
+      privateKey = crypto.createPrivateKey(privateKeyPem);
+    } catch {
+      return res.status(400).json({ success: false, error: 'Invalid private key PEM — re-generate keys and try again' });
+    }
+
+    const signatureBuffer = crypto.sign('sha256', Buffer.from(signingInput), {
+      key: privateKey,
+      padding: crypto.constants.RSA_PKCS1_PADDING,
+    });
+    const signedJwt = `${signingInput}.${signatureBuffer.toString('base64url')}`;
+
+    logger.info(
+      { event: 'ssf_transmit_attempt', provider: providerName, eventLabel, destination: destinationEndpoint },
+      `SSF transmit: ${providerName} → ${eventLabel}`
+    );
+
+    // 4. POST the signed SET to Okta
+    const oktaResponse = await fetch(destinationEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/secevent+jwt',
+        'Accept': 'application/json',
+      },
+      body: signedJwt,
+    });
+
+    // 5. Log to attack log + broadcast via WebSocket (preserves demo attack log flow)
+    const timestamp = new Date().toISOString();
+    const attack = {
+      attackType: 'ssf-transmitter',
+      providerName,
+      eventLabel,
+      timestamp,
+      id: `ssf-${Date.now()}`,
+      ssfSuccess: oktaResponse.ok,
+      ssfStatus: oktaResponse.status,
+    };
+
+    attackLog.unshift(attack);
+    if (attackLog.length > 100) attackLog.pop();
+
+    try {
+      await attacksRepo.recordAttack({ demoId: currentDemoId, attackType: 'ssf-transmitter', targetUseCase: null });
+    } catch (err) {
+      // Non-fatal — in-memory log already updated
+    }
+
+    broadcast({ type: 'ATTACK_LAUNCHED', attack });
+    metrics.attacksLaunched++;
+
+    // 6. Return Okta response with actionable error hints
+    if (!oktaResponse.ok) {
+      const errorText = await oktaResponse.text();
+      let errorCode = '';
+      let errorDescription = '';
+
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorCode = errorJson.error || errorJson.errorCode || '';
+        errorDescription = errorJson.error_description || errorJson.errorSummary || errorText;
+      } catch {
+        errorDescription = errorText || `HTTP ${oktaResponse.status}`;
+      }
+
+      let hint = '';
+      if (errorCode === 'invalid_request' || errorDescription.includes('issuer')) {
+        hint = 'Check that the Issuer URL matches your Okta SSF stream configuration exactly.';
+      } else if (errorDescription.includes('jwks') || errorDescription.includes('key') || errorDescription.includes('signature')) {
+        hint = 'JWKS verification failed. Ensure your hosted JWKS contains the current public key.';
+      } else if (errorDescription.includes('audience') || errorDescription.includes('aud')) {
+        hint = 'Audience mismatch. Ensure Okta domain has no -admin suffix or trailing slash.';
+      } else if (oktaResponse.status === 400) {
+        hint = 'Okta rejected the request. Verify the SSF stream is configured with a matching Issuer URL and JWKS endpoint.';
+      } else if (oktaResponse.status === 401 || oktaResponse.status === 403) {
+        hint = 'Authentication failed. Ensure your hosted JWKS is publicly accessible and contains the current public key.';
+      }
+
+      logger.warn(
+        { event: 'ssf_transmit_rejected', status: oktaResponse.status, errorCode },
+        `SSF transmit rejected by Okta: ${errorCode || oktaResponse.status}`
+      );
+
+      return res.status(oktaResponse.status).json({
+        success: false,
+        error: errorCode || `Okta Error (${oktaResponse.status})`,
+        errorDescription,
+        hint,
+        debugInfo: { audience: tokenAudience, issuer: issuerUrl, endpoint: destinationEndpoint, keyId },
+        status: oktaResponse.status,
+        payload,
+      });
+    }
+
+    logger.info(
+      { event: 'ssf_transmit_success', provider: providerName, eventLabel, status: oktaResponse.status },
+      `SSF event transmitted successfully: ${providerName} → ${eventLabel}`
+    );
+
+    return res.json({ success: true, jwt: signedJwt, payload, status: oktaResponse.status });
+
+  } catch (err) {
+    logger.error({ event: 'ssf_transmit_error', err: err.message }, 'SSF transmit internal error');
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Debug: expose raw webhook log (admin only — requires API key)
