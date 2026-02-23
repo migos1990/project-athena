@@ -57,9 +57,14 @@ export function ActivityLog({ logs }) {
                     backgroundColor: log.success ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
                   }}
                 >
-                  {log.success ? '202 Accepted' : 'Failed'}
+                  {log.success ? `${log.status || 202} Accepted` : (log.error || 'Failed')}
                 </span>
               </div>
+              {!log.success && log.hint && (
+                <p className="mt-1.5 text-[10px] leading-relaxed" style={{ color: 'rgba(251,191,36,0.9)' }}>
+                  {log.hint}
+                </p>
+              )}
             </div>
           ))
         )}

@@ -1,8 +1,20 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { PROVIDERS, PROVIDER_LIST, buildSimulatedPayload } from '../../config/providers';
+import { PROVIDERS, PROVIDER_LIST } from '../../config/providers';
 import { EventGrid } from './EventGrid';
 import { ActivityLog } from './ActivityLog';
+import { generateKeyPair } from '../../utils/crypto';
+
+const API_KEY = import.meta.env.VITE_DEMO_API_KEY || '';
+
+function getApiUrl() {
+  if (window.location.hostname.includes('app.github.dev')) {
+    const parts = window.location.hostname.split('-');
+    const codespaceName = `${parts[0]}-${parts[1]}-${parts[2]}`;
+    return `https://${codespaceName}-3001.app.github.dev`;
+  }
+  return `${window.location.protocol}//${window.location.hostname}:3001`;
+}
 
 export function SSFDashboard() {
   const [isDark, setIsDark] = useState(true);
@@ -12,10 +24,12 @@ export function SSFDashboard() {
     subjectEmail: '',
   });
   const [selectedProvider, setSelectedProvider] = useState('crowdstrike');
-  const [keys, setKeys] = useState(null);
+  const [keys, setKeys] = useState(null);        // { privatePem, publicJwk, kid }
+  const [generatingKeys, setGeneratingKeys] = useState(false);
   const [activityLog, setActivityLog] = useState([]);
   const [lastPayload, setLastPayload] = useState(null);
   const [showPayload, setShowPayload] = useState(false);
+  const [transmitting, setTransmitting] = useState(false);
 
   // Load config from localStorage
   useEffect(() => {
@@ -40,29 +54,24 @@ export function SSFDashboard() {
     setConfig(prev => ({ ...prev, issuerUrl: p.defaultIssuer }));
   };
 
+  // Real RSA-256 key generation using jose + Web Crypto API
   const handleGenerateKeys = async () => {
+    setGeneratingKeys(true);
     setKeys(null);
-    await new Promise(r => setTimeout(r, 400));
-    const kid = 'key-' + Math.random().toString(36).slice(2, 9);
-    const fakeN = btoa(Array.from({ length: 128 }, () => String.fromCharCode(Math.floor(Math.random() * 94) + 33)).join('')).slice(0, 172);
-    setKeys({
-      kid,
-      jwks: {
-        keys: [{
-          kty: 'RSA',
-          kid,
-          use: 'sig',
-          alg: 'RS256',
-          n: fakeN,
-          e: 'AQAB',
-        }],
-      },
-    });
+    try {
+      const result = await generateKeyPair();
+      setKeys(result);
+    } catch (err) {
+      console.error('Key generation failed:', err);
+    } finally {
+      setGeneratingKeys(false);
+    }
   };
 
   const handleExportJWKS = () => {
     if (!keys) return;
-    const blob = new Blob([JSON.stringify(keys.jwks, null, 2)], { type: 'application/json' });
+    const jwks = { keys: [keys.publicJwk] };
+    const blob = new Blob([JSON.stringify(jwks, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -71,19 +80,66 @@ export function SSFDashboard() {
     URL.revokeObjectURL(url);
   };
 
-  const handleTransmitEvent = (event) => {
-    const payload = buildSimulatedPayload(provider, event, config);
-    setLastPayload(payload);
-    setShowPayload(true);
+  // Real SSF transmission — signs JWT server-side and posts to Okta
+  const handleTransmitEvent = async (event) => {
+    if (!keys || !isConfigured || transmitting) return;
 
-    setActivityLog(prev => [{
-      id: Date.now(),
-      timestamp: new Date().toISOString(),
-      provider: provider.name,
-      event: event.label,
-      success: true,
-      setId: payload.jti,
-    }, ...prev]);
+    setTransmitting(true);
+    const apiUrl = getApiUrl();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const eventsPayload = event.buildPayload(config.subjectEmail, timestamp);
+
+    try {
+      const response = await fetch(`${apiUrl}/ssf/transmit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': API_KEY,
+        },
+        body: JSON.stringify({
+          oktaDomain: config.oktaDomain,
+          issuerUrl: config.issuerUrl,
+          subjectEmail: config.subjectEmail,
+          privateKeyPem: keys.privatePem,
+          keyId: keys.kid,
+          eventsPayload,
+          providerName: provider.name,
+          eventLabel: event.label,
+          providerId: selectedProvider,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.payload) {
+        setLastPayload(data.payload);
+        setShowPayload(true);
+      }
+
+      setActivityLog(prev => [{
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        provider: provider.name,
+        event: event.label,
+        success: data.success,
+        status: data.status || response.status,
+        error: data.error,
+        hint: data.hint,
+        jti: data.payload?.jti,
+      }, ...prev]);
+
+    } catch (err) {
+      setActivityLog(prev => [{
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        provider: provider.name,
+        event: event.label,
+        success: false,
+        error: 'Network error',
+      }, ...prev]);
+    } finally {
+      setTransmitting(false);
+    }
   };
 
   const isConfigured = config.oktaDomain && config.subjectEmail;
@@ -113,12 +169,10 @@ export function SSFDashboard() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              {/* Status indicator */}
               <div className="flex items-center gap-2 text-xs ssf-text-muted">
                 <div className={`w-2 h-2 rounded-full ${isConfigured && keys ? 'bg-green-500' : 'bg-yellow-500'} animate-pulse`} />
-                {isConfigured && keys ? 'Ready' : 'Configure below'}
+                {isConfigured && keys ? 'Ready to transmit' : 'Configure below'}
               </div>
-              {/* Theme toggle */}
               <button
                 onClick={() => setIsDark(!isDark)}
                 className="p-2 rounded-lg ssf-card hover:opacity-80 transition-opacity"
@@ -213,21 +267,22 @@ export function SSFDashboard() {
 
                 <button
                   onClick={handleGenerateKeys}
-                  className="w-full text-xs font-semibold px-4 py-2.5 rounded-lg transition-all duration-150 text-white hover:opacity-90 active:scale-[0.98]"
+                  disabled={generatingKeys}
+                  className="w-full text-xs font-semibold px-4 py-2.5 rounded-lg transition-all duration-150 text-white hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
                   style={{ backgroundColor: '#1662dd' }}
                 >
-                  {keys ? 'Regenerate Keys' : 'Generate RSA-256 Keys'}
+                  {generatingKeys ? 'Generating…' : keys ? 'Regenerate RSA-256 Keys' : 'Generate RSA-256 Keys'}
                 </button>
 
                 {keys && (
                   <div className="mt-3 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] ssf-text-muted">Key ID</span>
-                      <code className="text-[11px] font-mono ssf-text-primary">{keys.kid}</code>
+                      <code className="text-[10px] font-mono ssf-text-primary truncate max-w-[120px]" title={keys.kid}>{keys.kid}</code>
                     </div>
                     <div className="ssf-code-block rounded-lg p-3 max-h-32 overflow-y-auto">
                       <pre className="text-[10px] font-mono ssf-text-secondary whitespace-pre-wrap break-all">
-                        {JSON.stringify(keys.jwks, null, 2)}
+                        {JSON.stringify({ keys: [keys.publicJwk] }, null, 2)}
                       </pre>
                     </div>
                     <button
@@ -241,8 +296,8 @@ export function SSFDashboard() {
               </div>
             </div>
 
-            {/* Center Column: Events */}
-            <div className="lg:col-span-5">
+            {/* Center Column: Events + Payload */}
+            <div className="lg:col-span-5 space-y-4">
               <div className="ssf-card rounded-xl p-4">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-semibold ssf-text-primary flex items-center gap-2">
@@ -263,25 +318,26 @@ export function SSFDashboard() {
                   events={provider.events}
                   providerColor={provider.color}
                   onEventClick={handleTransmitEvent}
-                  disabled={!keys || !isConfigured}
+                  disabled={!keys || !isConfigured || transmitting}
+                  loading={transmitting}
                 />
 
                 {(!keys || !isConfigured) && (
                   <div className="mt-3 text-[11px] ssf-text-muted text-center py-2 rounded-lg" style={{ backgroundColor: 'rgba(234,179,8,0.08)' }}>
-                    {!keys ? 'Generate keys first' : 'Enter Okta domain and target subject'}
+                    {!keys ? 'Generate RSA-256 keys first' : 'Enter Okta domain and target subject'}
                   </div>
                 )}
               </div>
 
               {/* Payload Viewer */}
               {showPayload && lastPayload && (
-                <div className="ssf-card rounded-xl p-4 mt-4">
+                <div className="ssf-card rounded-xl p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-semibold ssf-text-primary flex items-center gap-2">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
                       </svg>
-                      Last Payload
+                      Transmitted Payload
                     </h3>
                     <button onClick={() => setShowPayload(false)} className="text-xs ssf-text-muted hover:opacity-70">
                       Hide

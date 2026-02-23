@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { getSeverityColor } from '../../config/providers';
 
-export function EventGrid({ events, providerColor, onEventClick, disabled }) {
+// loading prop: when true (real transmit in progress), shows spinner on all buttons.
+// The local loadingId state is kept for the 600ms visual delay on click before
+// handing off to the parent's async transmit handler.
+export function EventGrid({ events, providerColor, onEventClick, disabled, loading = false }) {
   const [loadingId, setLoadingId] = useState(null);
 
   const handleClick = async (event) => {
-    if (disabled || loadingId) return;
+    if (disabled || loadingId || loading) return;
     setLoadingId(event.id);
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 300)); // brief visual feedback before async transmit
     onEventClick(event);
     setLoadingId(null);
   };
@@ -15,14 +18,14 @@ export function EventGrid({ events, providerColor, onEventClick, disabled }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       {events.map((event) => {
-        const isLoading = loadingId === event.id;
+        const isLoading = loadingId === event.id || loading;
         const severityColor = getSeverityColor(event.severity);
 
         return (
           <button
             key={event.id}
             onClick={() => handleClick(event)}
-            disabled={disabled || !!loadingId}
+            disabled={disabled || !!loadingId || loading}
             style={{ borderLeftColor: severityColor }}
             className="relative text-left p-4 rounded-lg border-l-4 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-[0.98]"
           >
