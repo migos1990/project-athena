@@ -1,10 +1,28 @@
 require('dotenv').config();
 
+// Validate environment before anything else — fail fast on missing vars
+const { validateEnv } = require('./config/validateEnv');
+validateEnv();
+
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { WebSocketServer } = require('ws');
 const http = require('http');
 const { generateUseCaseNarrative } = require('./services/claudeService');
+const { requireApiKey } = require('./middleware/auth');
+const { validate, attackSchema } = require('./middleware/validate');
+const { initDb, demos: demosRepo, events: eventsRepo, useCases: useCasesRepo, attacks: attacksRepo, audit } = require('./db');
+const logger = require('./config/logger');
+
+// Redirect all console.* calls through Pino so existing call sites emit
+// structured JSON in production without requiring individual rewrites.
+// Phase 6 improvement: migrate each call site to use logger directly.
+console.log   = (...args) => logger.info(args.join(' '));
+console.error = (...args) => logger.error(args.join(' '));
+console.warn  = (...args) => logger.warn(args.join(' '));
 
 const app = express();
 
@@ -19,9 +37,52 @@ const KNOWN_USE_CASES = [
 ];
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// ─── Security middleware ──────────────────────────────────────────────────────
+
+// Helmet: sets secure HTTP response headers (CSP, HSTS, X-Frame-Options, etc.)
+app.use(helmet());
+
+// CORS: only allow explicitly configured origins
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:5173'];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, Postman, same-origin)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin '${origin}' not allowed`));
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-API-Key']
+}));
+
+// Global rate limiter: 200 requests per 15 minutes per IP
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please slow down' }
+});
+
+// Strict limiter for /attack: 10 per minute per IP
+const attackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Attack rate limit exceeded (10/min)' }
+});
+
+app.use(globalLimiter);
+
+// Capture raw body for Okta HMAC signature verification
+app.use(express.json({
+  limit: '100kb',
+  verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
 
 // Demo state
 let demoStartTime = null;
@@ -101,8 +162,12 @@ const ATTACK_DETECTIONS = {
 // Stores whichever of session.start / auth_via_mfa arrives first
 let pendingMfaEvents = new Map();
 
-// Deduplicate Okta events by UUID (Okta may retry delivery)
+// In-memory fallback for event deduplication when DB is unavailable
+// Primary deduplication now goes through eventsRepo.isDuplicate()
 const processedEventUUIDs = new Set();
+
+// Currently active demo ID (set on start/reset, used for all DB writes)
+let currentDemoId = null;
 
 // Raw webhook log for debugging — captures every request hitting /webhook (capped at 100)
 const webhookLog = [];
@@ -117,7 +182,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
-  console.log('Client connected');
+  logger.info({ event: 'ws_connect', totalClients: clients.size + 1 }, 'WebSocket client connected');
   clients.add(ws);
   ws.isAlive = true;
 
@@ -135,12 +200,12 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    console.log('Client disconnected');
+    logger.info({ event: 'ws_disconnect', totalClients: clients.size - 1 }, 'WebSocket client disconnected');
     clients.delete(ws);
   });
 
   ws.on('error', (err) => {
-    console.error('WebSocket error:', err.message);
+    logger.error({ event: 'ws_error', err: err.message }, 'WebSocket error');
     clients.delete(ws);
   });
 });
@@ -179,86 +244,194 @@ function broadcast(message) {
   });
 }
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', demoStartTime, useCaseStates });
+// In-memory metrics counters (reset on server restart)
+const metrics = {
+  requestsTotal: 0,
+  attacksLaunched: 0,
+  useCasesCompleted: 0,
+  webhookEventsReceived: 0,
+  claudeApiCallsTotal: 0,
+  serverStartTime: Date.now()
+};
+
+// Increment request counter for all non-metrics/health requests
+app.use((req, res, next) => {
+  if (req.path !== '/metrics' && req.path !== '/health' && req.path !== '/ready') {
+    metrics.requestsTotal++;
+  }
+  next();
+});
+
+// Health check — deep check (DB + WebSocket connectivity)
+app.get('/health', async (req, res) => {
+  const checks = { db: 'unknown', websocket: 'ok' };
+  let dbOk = false;
+
+  try {
+    const { db } = require('./db');
+    await db.raw('SELECT 1');
+    checks.db = 'ok';
+    dbOk = true;
+  } catch (err) {
+    checks.db = `error: ${err.message}`;
+  }
+
+  const status = dbOk ? 'ok' : 'degraded';
+  res.status(dbOk ? 200 : 503).json({
+    status,
+    checks,
+    demoStartTime,
+    currentDemoId,
+    websocketClients: clients.size,
+    uptime_seconds: Math.floor((Date.now() - metrics.serverStartTime) / 1000)
+  });
+});
+
+// Readiness probe — fails until migrations complete (used by Kubernetes)
+// Once the server boots and migrations run, this always returns 200.
+let isReady = false;
+app.get('/ready', (req, res) => {
+  if (isReady) {
+    return res.status(200).json({ ready: true });
+  }
+  res.status(503).json({ ready: false, reason: 'Waiting for database migrations' });
+});
+
+// Metrics endpoint — Prometheus-compatible text format
+app.get('/metrics', (req, res) => {
+  const uptime = Math.floor((Date.now() - metrics.serverStartTime) / 1000);
+  const text = [
+    '# HELP athena_requests_total Total HTTP requests processed',
+    '# TYPE athena_requests_total counter',
+    `athena_requests_total ${metrics.requestsTotal}`,
+    '',
+    '# HELP athena_attacks_launched_total Red Team attacks launched',
+    '# TYPE athena_attacks_launched_total counter',
+    `athena_attacks_launched_total ${metrics.attacksLaunched}`,
+    '',
+    '# HELP athena_use_cases_completed_total Use cases completed in demos',
+    '# TYPE athena_use_cases_completed_total counter',
+    `athena_use_cases_completed_total ${metrics.useCasesCompleted}`,
+    '',
+    '# HELP athena_webhook_events_received_total Okta webhook events received',
+    '# TYPE athena_webhook_events_received_total counter',
+    `athena_webhook_events_received_total ${metrics.webhookEventsReceived}`,
+    '',
+    '# HELP athena_claude_api_calls_total Claude API calls made',
+    '# TYPE athena_claude_api_calls_total counter',
+    `athena_claude_api_calls_total ${metrics.claudeApiCallsTotal}`,
+    '',
+    '# HELP athena_websocket_clients_current Current WebSocket connections',
+    '# TYPE athena_websocket_clients_current gauge',
+    `athena_websocket_clients_current ${clients.size}`,
+    '',
+    '# HELP athena_uptime_seconds Server uptime in seconds',
+    '# TYPE athena_uptime_seconds gauge',
+    `athena_uptime_seconds ${uptime}`,
+    ''
+  ].join('\n');
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+  res.send(text);
 });
 
 // Start demo (timestamp gate)
-app.post('/start-demo', (req, res) => {
-  demoStartTime = new Date().toISOString();
-  useCaseStates = {
-    mfaLogin: { completed: false, data: null, generatedContent: null },
-    groupAssignment: { completed: false, data: null, generatedContent: null },
-    itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
-    itpRiskElevation: { completed: false, data: null, generatedContent: null },
-    itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
-    itpUniversalLogout: { completed: false, data: null, generatedContent: null }
-  };
-  attackLog = [];
-  detectionStates = {
-    partiallyOffboarded: { completed: false, data: null },
-    unmanagedServiceAccount: { completed: false, data: null },
-    weakPasswordPolicy: { completed: false, data: null },
-    ssoBypass: { completed: false, data: null }
-  };
-  pendingMfaEvents.clear();
-  processedEventUUIDs.clear();
+app.post('/start-demo', requireApiKey, async (req, res) => {
+  try {
+    demoStartTime = new Date().toISOString();
+    useCaseStates = {
+      mfaLogin: { completed: false, data: null, generatedContent: null },
+      groupAssignment: { completed: false, data: null, generatedContent: null },
+      itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
+      itpRiskElevation: { completed: false, data: null, generatedContent: null },
+      itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
+      itpUniversalLogout: { completed: false, data: null, generatedContent: null }
+    };
+    attackLog = [];
+    detectionStates = {
+      partiallyOffboarded: { completed: false, data: null },
+      unmanagedServiceAccount: { completed: false, data: null },
+      weakPasswordPolicy: { completed: false, data: null },
+      ssoBypass: { completed: false, data: null }
+    };
+    pendingMfaEvents.clear();
+    processedEventUUIDs.clear();
 
-  console.log(`Demo started at ${demoStartTime}`);
+    // Persist new demo to database
+    const demo = await demosRepo.createDemo({ createdBy: 'api-key' });
+    await demosRepo.markStarted(demo.id);
+    currentDemoId = demo.id;
 
-  broadcast({
-    type: 'DEMO_STARTED',
-    startTime: demoStartTime,
-    useCaseStates,
-    detectionStates,
-    attacks: attackLog
-  });
+    await audit.log({ actor: 'api-key', action: 'start_demo', resource: demo.id, result: 'success' });
+    logger.info({ event: 'demo_started', demoId: currentDemoId, startTime: demoStartTime }, 'Demo started');
 
-  res.json({ startTime: demoStartTime });
+    broadcast({
+      type: 'DEMO_STARTED',
+      startTime: demoStartTime,
+      useCaseStates,
+      detectionStates,
+      attacks: attackLog
+    });
+
+    res.json({ startTime: demoStartTime, demoId: currentDemoId });
+  } catch (err) {
+    console.error('start-demo error:', err.message);
+    res.status(500).json({ error: 'Failed to start demo' });
+  }
 });
 
 // Reset demo
-app.post('/reset-demo', (req, res) => {
-  demoStartTime = new Date().toISOString();
-  useCaseStates = {
-    mfaLogin: { completed: false, data: null, generatedContent: null },
-    groupAssignment: { completed: false, data: null, generatedContent: null },
-    itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
-    itpRiskElevation: { completed: false, data: null, generatedContent: null },
-    itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
-    itpUniversalLogout: { completed: false, data: null, generatedContent: null }
-  };
-  attackLog = [];
-  detectionStates = {
-    partiallyOffboarded: { completed: false, data: null },
-    unmanagedServiceAccount: { completed: false, data: null },
-    weakPasswordPolicy: { completed: false, data: null },
-    ssoBypass: { completed: false, data: null }
-  };
-  pendingMfaEvents.clear();
-  processedEventUUIDs.clear();
+app.post('/reset-demo', requireApiKey, async (req, res) => {
+  try {
+    // Mark old demo as reset in DB
+    if (currentDemoId) {
+      await demosRepo.markReset(currentDemoId);
+    }
 
-  console.log(`Demo reset at ${demoStartTime}`);
+    demoStartTime = new Date().toISOString();
+    useCaseStates = {
+      mfaLogin: { completed: false, data: null, generatedContent: null },
+      groupAssignment: { completed: false, data: null, generatedContent: null },
+      itpSessionAnomaly: { completed: false, data: null, generatedContent: null },
+      itpRiskElevation: { completed: false, data: null, generatedContent: null },
+      itpImpossibleTravel: { completed: false, data: null, generatedContent: null },
+      itpUniversalLogout: { completed: false, data: null, generatedContent: null }
+    };
+    attackLog = [];
+    detectionStates = {
+      partiallyOffboarded: { completed: false, data: null },
+      unmanagedServiceAccount: { completed: false, data: null },
+      weakPasswordPolicy: { completed: false, data: null },
+      ssoBypass: { completed: false, data: null }
+    };
+    pendingMfaEvents.clear();
+    processedEventUUIDs.clear();
 
-  broadcast({
-    type: 'DEMO_RESET',
-    startTime: demoStartTime,
-    useCaseStates,
-    detectionStates,
-    attacks: attackLog
-  });
+    // Create a fresh demo record for the new session
+    const demo = await demosRepo.createDemo({ createdBy: 'api-key' });
+    await demosRepo.markStarted(demo.id);
+    currentDemoId = demo.id;
 
-  res.json({ startTime: demoStartTime });
+    await audit.log({ actor: 'api-key', action: 'reset_demo', resource: currentDemoId, result: 'success' });
+    console.log(`Demo reset at ${demoStartTime} (id: ${currentDemoId})`);
+
+    broadcast({
+      type: 'DEMO_RESET',
+      startTime: demoStartTime,
+      useCaseStates,
+      detectionStates,
+      attacks: attackLog
+    });
+
+    res.json({ startTime: demoStartTime, demoId: currentDemoId });
+  } catch (err) {
+    console.error('reset-demo error:', err.message);
+    res.status(500).json({ error: 'Failed to reset demo' });
+  }
 });
 
 // Red Team attack endpoint
-app.post('/attack', (req, res) => {
+app.post('/attack', requireApiKey, attackLimiter, validate(attackSchema), async (req, res) => {
   const { attackType } = req.body;
-
-  if (!attackType) {
-    return res.status(400).json({ error: 'attackType is required' });
-  }
 
   const timestamp = new Date().toISOString();
   const attack = {
@@ -267,9 +440,24 @@ app.post('/attack', (req, res) => {
     id: `attack-${Date.now()}`
   };
 
-  // Add to attack log (capped at 100 entries)
+  // Add to in-memory attack log (capped at 100 entries)
   attackLog.unshift(attack);
   if (attackLog.length > 100) attackLog.pop();
+
+  // Persist attack to database
+  let dbAttackId = null;
+  try {
+    const mapping = ATTACK_DETECTIONS[attackType];
+    dbAttackId = await attacksRepo.recordAttack({
+      demoId: currentDemoId,
+      attackType,
+      targetUseCase: mapping?.targetIds?.[0] || null
+    });
+    await audit.log({ actor: 'api-key', action: 'launch_attack', resource: attackType, result: 'success', details: { attackId: dbAttackId } });
+  } catch (err) {
+    console.error('DB: failed to persist attack:', err.message);
+    // Non-fatal — continue with in-memory operation
+  }
 
   // Broadcast attack launched
   broadcast({
@@ -277,15 +465,16 @@ app.post('/attack', (req, res) => {
     attack
   });
 
-  console.log(`🔴 Red Team attack launched: ${attackType}`);
+  metrics.attacksLaunched++;
+  logger.info({ event: 'attack_launched', attackType, attackId: attack.id }, `Red Team attack launched: ${attackType}`);
 
   // Trigger Blue Team detection/use case after delay (1.5-3 seconds)
   const attackMapping = ATTACK_DETECTIONS[attackType];
   if (attackMapping && attackMapping.targetIds && attackMapping.targetIds.length > 0) {
     const delay = 1500 + Math.random() * 1500; // 1.5-3 seconds
 
-    setTimeout(() => {
-      attackMapping.targetIds.forEach(targetId => {
+    setTimeout(async () => {
+      attackMapping.targetIds.forEach(async (targetId) => {
         const enrichedData = {
           ...attackMapping.data,
           detectedAt: new Date().toISOString()
@@ -299,6 +488,14 @@ app.post('/attack', (req, res) => {
             generatedContent: null // No Claude AI for simulated attacks
           };
 
+          // Persist use case completion
+          try {
+            await useCasesRepo.recordUseCase({ demoId: currentDemoId, type: targetId, eventData: enrichedData });
+            if (dbAttackId) await attacksRepo.markDetected(dbAttackId);
+          } catch (err) {
+            console.error('DB: failed to persist use case:', err.message);
+          }
+
           broadcast({
             type: 'USE_CASE_COMPLETED',
             useCase: targetId,
@@ -306,13 +503,22 @@ app.post('/attack', (req, res) => {
             generatedContent: null
           });
 
-          console.log(`🔵 Blue Team use case triggered: ${targetId}`);
+          metrics.useCasesCompleted++;
+          logger.info({ event: 'use_case_triggered', useCase: targetId, via: 'attack' }, `Blue Team use case triggered: ${targetId}`);
         } else {
           // Trigger ISPM detection (hub card)
           detectionStates[targetId] = {
             completed: true,
             data: enrichedData
           };
+
+          // Persist detection
+          try {
+            await useCasesRepo.recordUseCase({ demoId: currentDemoId, type: `detection:${targetId}`, eventData: enrichedData });
+            if (dbAttackId) await attacksRepo.markDetected(dbAttackId);
+          } catch (err) {
+            console.error('DB: failed to persist detection:', err.message);
+          }
 
           broadcast({
             type: 'DETECTION_FOUND',
@@ -329,10 +535,39 @@ app.post('/attack', (req, res) => {
   res.json({ success: true, attack });
 });
 
-// Debug: expose raw webhook log
-app.get('/debug-log', (req, res) => {
+// Debug: expose raw webhook log (admin only — requires API key)
+app.get('/debug-log', requireApiKey, (req, res) => {
   res.json(webhookLog);
 });
+
+// ─── Okta HMAC signature validation helper ────────────────────────────────────
+// Okta signs the raw request body with HMAC-SHA256 using the Event Hook secret.
+// If OKTA_WEBHOOK_SECRET is configured we enforce the signature on POST requests.
+function verifyOktaSignature(req) {
+  const secret = process.env.OKTA_WEBHOOK_SECRET;
+  if (!secret) return true; // Skip in dev when secret not configured
+
+  const signature = req.headers['x-okta-request-signature'];
+  if (!signature) return false;
+
+  const rawBody = req.rawBody; // set by express.json verify callback (see below)
+  if (!rawBody) return false;
+
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('base64');
+
+  // Timing-safe comparison to prevent timing attacks
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(expected)
+    );
+  } catch {
+    return false;
+  }
+}
 
 // Okta Event Hook webhook
 app.all('/webhook', (req, res) => {
@@ -345,7 +580,7 @@ app.all('/webhook', (req, res) => {
   });
   if (webhookLog.length > 100) webhookLog.shift();
 
-  // GET = Verification handshake
+  // GET = Verification handshake (no signature on challenge requests)
   if (req.method === 'GET') {
     const challenge = req.headers['x-okta-verification-challenge'];
     if (challenge) {
@@ -357,6 +592,14 @@ app.all('/webhook', (req, res) => {
 
   // POST = Event delivery
   if (req.method === 'POST') {
+    metrics.webhookEventsReceived++;
+
+    // Enforce HMAC signature when secret is configured
+    if (!verifyOktaSignature(req)) {
+      logger.warn({ event: 'webhook_signature_invalid' }, 'Webhook: invalid or missing Okta HMAC signature — rejected');
+      return res.status(403).json({ error: 'Invalid webhook signature' });
+    }
+
     // Respond immediately (Okta has 3-second timeout)
     res.status(200).send();
 
@@ -367,30 +610,48 @@ app.all('/webhook', (req, res) => {
 });
 
 // Process Okta events (with error handling)
-function processEvents(events) {
+async function processEvents(events) {
   if (!Array.isArray(events)) {
     console.log('⚠️  Invalid payload: events is not an array');
     return;
   }
 
-  events.forEach(event => {
+  for (const event of events) {
     try {
       if (!event || !event.eventType) {
         console.log('⚠️  Skipped malformed event (missing eventType)');
         return;
       }
 
-      // Deduplicate by event UUID
-      if (event.uuid && processedEventUUIDs.has(event.uuid)) {
-        console.log(`  → Skipped duplicate event (uuid: ${event.uuid})`);
-        return;
-      }
+      // Deduplicate by event UUID — check DB first, fall back to in-memory Set
       if (event.uuid) {
-        processedEventUUIDs.add(event.uuid);
-        // Cap at 1000 entries to prevent unbounded growth
-        if (processedEventUUIDs.size > 1000) {
-          const first = processedEventUUIDs.values().next().value;
-          processedEventUUIDs.delete(first);
+        let isDup = false;
+        try {
+          isDup = await eventsRepo.isDuplicate(event.uuid);
+        } catch {
+          // DB unavailable — fall back to in-memory check
+          isDup = processedEventUUIDs.has(event.uuid);
+        }
+        if (isDup) {
+          console.log(`  → Skipped duplicate event (uuid: ${event.uuid})`);
+          return;
+        }
+        // Mark as processed in both stores
+        try {
+          await eventsRepo.recordEvent({
+            demoId: currentDemoId,
+            oktaUuid: event.uuid,
+            eventType: event.eventType,
+            eventTimestamp: event.published,
+            eventData: event
+          });
+        } catch {
+          // Fall back to in-memory deduplication
+          processedEventUUIDs.add(event.uuid);
+          if (processedEventUUIDs.size > 1000) {
+            const first = processedEventUUIDs.values().next().value;
+            processedEventUUIDs.delete(first);
+          }
         }
       }
 
@@ -455,7 +716,7 @@ function processEvents(events) {
     } catch (err) {
       console.error(`⚠️  Error processing event: ${err.message}`);
     }
-  });
+  }
 }
 
 // Check if event should be processed
@@ -814,12 +1075,36 @@ function handleUniversalLogout(data, fullEvent) {
   })();
 }
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`WebSocket available at ws://localhost:${PORT}`);
-  console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
+// Global error handler — catches CORS errors and other unhandled middleware errors
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err.message && err.message.startsWith('CORS:')) {
+    return res.status(403).json({ error: err.message });
+  }
+  console.error('Unhandled error:', err.message);
+  res.status(500).json({ error: 'Internal server error' });
 });
+
+// Start server — run DB migrations first, then open port
+(async () => {
+  try {
+    await initDb();
+    isReady = true; // Signal readiness probe: migrations complete
+  } catch (err) {
+    logger.error({ event: 'startup_failed', err: err.message }, 'Failed to initialise database — exiting');
+    process.exit(1);
+  }
+
+  server.listen(PORT, () => {
+    logger.info({
+      event: 'server_started',
+      port: PORT,
+      allowedOrigins,
+      hmacEnabled: Boolean(process.env.OKTA_WEBHOOK_SECRET),
+      nodeEnv: process.env.NODE_ENV || 'development'
+    }, `Project Athena server running on port ${PORT}`);
+  });
+})();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
@@ -829,3 +1114,6 @@ process.on('SIGTERM', () => {
   wss.close();
   server.close();
 });
+
+// Export for testing — supertest binds its own ephemeral port
+module.exports = { app, server };

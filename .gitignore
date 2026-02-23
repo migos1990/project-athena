@@ -21,3 +21,7 @@ npm-debug.log*
 # Build output
 dist/
 build/
+
+# SQLite development database
+*.sqlite3
+*.sqlite

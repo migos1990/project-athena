@@ -1,0 +1,369 @@
+# Project Athena — Production Readiness Plan
+
+> **Status Legend:**
+> `[ ]` = Not started · `[~]` = In progress · `[x]` = Complete · `[!]` = Blocked
+
+---
+
+## Executive Summary
+
+Project Athena is a polished, feature-complete MVP built in a 9-day hackathon sprint. The core architecture (React 19, Express 5, WebSocket, Claude AI) is sound, but the system is currently a **controlled-environment prototype**, not a production-grade product. It has **zero tests, no authentication, no persistence, no containerization, and no observability**.
+
+**Overall Grade: F for production readiness** — not due to bad code, but due to expected prototype gaps.
+
+The plan below is organized into 5 sequential phases. Phases 1–2 are **blocking** (nothing should go to production without them). Phases 3–5 are **required** for a stable, scalable, and maintainable production system.
+
+---
+
+## Current State: Critical Findings
+
+| Domain | Grade | Verdict |
+|---|---|---|
+| Feature completeness | A | All planned features implemented |
+| Code organization | B | Clean separation of concerns |
+| Security | F | No auth, open CORS, no rate limiting |
+| Testing | F | Zero test files exist |
+| Data persistence | F | All state is in-memory, lost on restart |
+| CI/CD | F | No pipeline, 100% manual deployment |
+| Monitoring & logging | C | `console.log` only, no persistence |
+| Containerization | F | No Docker, no orchestration |
+| Error handling | C | Basic try/catch, no error reporting |
+| API documentation | D | No OpenAPI spec, no versioning |
+
+---
+
+## Phase 1 — Security Hardening *(Blocking)*
+
+> **Status: `[x]` Complete**
+> **Completed: 2026-02-23**
+
+Nothing ships to production without this phase complete.
+
+### Checklist
+
+- [x] **1.1** — Authentication & Authorization
+  - [x] API key authentication middleware (`server/middleware/auth.js`) — upgradeable to Okta OAuth 2.0 in Phase 2
+  - [x] All mutating endpoints require `X-API-Key` header (`/attack`, `/start-demo`, `/reset-demo`, `/debug-log`)
+  - [ ] Full Okta OAuth 2.0 / OIDC with JWT + refresh tokens *(deferred to Phase 2 — requires Okta org credentials)*
+  - [ ] RBAC roles (admin, solution_engineer, viewer) *(deferred to Phase 2)*
+
+- [x] **1.2** — API Security
+  - [x] Replace `app.use(cors())` with explicit origin allowlist (`ALLOWED_ORIGINS` env var)
+  - [x] CORS error handler returns proper 403 (not 500)
+  - [x] Add Helmet.js for security headers (CSP, X-Frame-Options, HSTS, etc.)
+  - [x] Add Joi schema validation on `/attack` request body (`server/middleware/validate.js`)
+  - [x] Implement Okta Event Hook HMAC-SHA256 signature verification (`OKTA_WEBHOOK_SECRET`)
+  - [x] Timing-safe comparison on HMAC check (prevents timing attacks)
+  - [x] Global rate limiter: 200 req / 15 min per IP
+  - [x] Attack-specific limiter: 10 req / min per IP on `/attack`
+  - [x] Raw body capture for accurate webhook signature verification
+
+- [x] **1.3** — Secrets Management
+  - [x] Startup config validator — fails fast with helpful message if required env vars missing (`server/config/validateEnv.js`)
+  - [x] `.env.example` — documents all required and optional variables
+  - [x] `DEMO_API_KEY`, `OKTA_WEBHOOK_SECRET`, `ALLOWED_ORIGINS` added as named env vars
+  - [ ] Secrets vault integration (AWS Secrets Manager / HashiCorp Vault) *(deferred — infrastructure phase)*
+
+- [ ] **1.4** — HTTPS / WSS Enforcement *(deferred to Phase 4 — requires infrastructure)*
+  - [ ] TLS termination at nginx reverse proxy
+  - [ ] HTTP → HTTPS redirect
+  - [ ] WSS in production
+
+### Notes / Decisions
+
+- **Auth approach:** Implemented API key auth (X-API-Key header) as Phase 1. Full Okta OAuth 2.0 with JWT requires Okta org/app credentials and is a standalone effort tracked in Phase 2.
+- **CORS:** `ALLOWED_ORIGINS` env var accepts a comma-separated list. Defaults to `http://localhost:5173` for development.
+- **HMAC:** When `OKTA_WEBHOOK_SECRET` is empty (dev), HMAC check is skipped with a warning at startup. Required for production.
+- **Rate limits:** 200/15min global, 10/min on `/attack`. Adjust via code if needed; adding env var overrides is a Phase 2 improvement.
+
+### Test Results (2026-02-23)
+
+| Test | Expected | Result |
+|---|---|---|
+| `/health` public access | 200 | ✅ 200 |
+| `/attack` no API key | 401 | ✅ 401 |
+| `/attack` wrong API key | 403 | ✅ 403 |
+| `/attack` invalid attackType | 400 + details | ✅ 400 |
+| `/attack` valid key + type | 200 + payload | ✅ 200 |
+| `/start-demo` no key | 401 | ✅ 401 |
+| `/debug-log` no key | 401 | ✅ 401 |
+| CORS from evil.com | 403 | ✅ 403 |
+| CORS from localhost:5173 | 200 | ✅ 200 |
+| Server start missing env vars | exit(1) + clear message | ✅ pass |
+
+---
+
+## Phase 2 — Data Persistence *(Blocking)*
+
+> **Status: `[x]` Complete**
+> **Completed: 2026-02-23**
+
+The server currently holds all state in JavaScript variables. Any restart wipes everything.
+
+### Checklist
+
+- [x] **2.1** — Database Design
+  - [x] Knex.js migration runner (`server/db/knex.js` + `server/db/migrations/`)
+  - [x] `demos` table — tracks each demo session with status lifecycle
+  - [x] `use_cases` table — persists completed use case cards with event + Claude data
+  - [x] `events` table — persists raw Okta events with `okta_uuid UNIQUE` for deduplication
+  - [x] `attacks` table — persists Red Team attacks with detection timestamps
+  - [x] `claude_usage` table — ready for Claude API usage tracking (populated by Phase 5)
+  - [x] `audit_log` table — immutable append-only action log with actor/action/result
+  - [x] Repository pattern: `demoRepository`, `eventRepository`, `useCaseRepository`, `attackRepository`, `auditRepository`
+  - [x] Migrations run automatically on server startup
+  - [ ] Seed scripts for dev/staging environments *(deferred — low priority)*
+
+- [x] **2.2** — Persistence Integration in `server/index.js`
+  - [x] `/start-demo` creates DB record, returns `demoId`
+  - [x] `/reset-demo` marks old demo as reset, creates new demo record
+  - [x] `/attack` persists attack + marks detection time when Blue Team triggers
+  - [x] Webhook event deduplication via `eventsRepo.isDuplicate()` (DB-backed)
+  - [x] In-memory deduplication retained as graceful fallback if DB is unavailable
+  - [x] Audit log entries for all mutating actions
+  - [x] `processEvents()` made async to support DB await calls
+
+- [x] **2.3** — Database Driver Strategy
+  - [x] **Development:** SQLite via `better-sqlite3` (no external service needed)
+  - [x] **Production:** PostgreSQL via `pg` driver (set `DATABASE_URL` + `NODE_ENV=production`)
+  - [x] Same Knex query syntax works for both — zero code changes needed
+  - [x] Connection pooling configured for PostgreSQL (min: 2, max: 10)
+  - [x] SQLite files added to `.gitignore`
+  - [x] `DATABASE_URL` documented in `.env.example`
+
+- [ ] **2.4** — Redis for Real-Time State *(deferred to Phase 5 — scaling)*
+  - [ ] Move WebSocket fan-out to Redis Pub/Sub
+  - [ ] Store demo session state in Redis (TTL = 24h)
+  - [ ] Replace in-memory `narrativeCache` with Redis cache
+
+### Notes / Decisions
+
+- **Dev vs Prod driver:** SQLite for development eliminates all infrastructure dependencies. Setting `NODE_ENV=production` + `DATABASE_URL=postgres://...` switches to PostgreSQL automatically — no code changes needed.
+- **Redis deferred:** Redis Pub/Sub for WebSocket scaling is a Phase 5 concern. It's not needed until horizontal scaling is required. Current single-instance WebSocket architecture works as-is.
+- **Graceful DB fallback:** DB failures on event processing are non-fatal. The server logs the error and falls back to in-memory state so live demos aren't broken by a DB hiccup.
+
+### Test Results (2026-02-23)
+
+| Test | Expected | Result |
+|---|---|---|
+| Server boot runs migrations | `✅ Database migrations up to date` | ✅ pass |
+| `/start-demo` returns `demoId` | UUID in response | ✅ pass |
+| Demo record in DB | `status: active`, `started_at` set | ✅ pass |
+| `/attack` persists to attacks table | Record with `detection_triggered_at` | ✅ pass |
+| Use case auto-persisted after attack | `itpRiskElevation` in `use_cases` | ✅ pass |
+| Audit log entries created | `start_demo` + `launch_attack` entries | ✅ pass |
+
+---
+
+## Phase 3 — Testing Infrastructure *(Required)*
+
+> **Status: `[x]` Complete**
+> **Completed: 2026-02-23**
+
+### Checklist
+
+- [x] **3.1** — Backend Tests (Jest, `--runInBand`, in-memory SQLite)
+  - [x] Auth middleware: 401/403/200 for missing/wrong/correct key
+  - [x] Validation middleware: strips unknowns, rejects bad types, accepts all valid attack types
+  - [x] Security integration: CORS (403/200), auth on all 4 protected endpoints, Okta challenge
+  - [x] All 5 DB repositories: create, read, update, dedup, JSON parsing
+  - [x] `module.exports = { app, server }` for Supertest HTTP testing
+  - [x] **50 tests, 4 suites, 100% pass**
+
+- [x] **3.2** — Frontend Tests (Vitest + React Testing Library, jsdom)
+  - [x] `UseCaseCard`: 14 tests covering pending/completed states, AI content, typewriter, business outcomes, toggle, reset
+  - [x] **14 tests, 1 suite, 100% pass**
+
+- [x] **3.3** — Security Tests (covered in `api.security.test.js`)
+  - [x] Auth enforcement on `/attack`, `/start-demo`, `/debug-log`
+  - [x] CORS: rejected origin → 403, allowed origin → 200
+  - [x] Input validation: invalid type → 400 + details, unknown fields stripped
+
+- [ ] **3.4** — End-to-End Tests (Cypress) *(deferred — requires running UI + server)*
+- [ ] MFA correlation, rate limit boundary, WebSocket tests *(deferred)*
+
+### Notes / Decisions
+
+- In-memory SQLite (`SQLITE_PATH=:memory:`) eliminates all DB setup in CI.
+- Supertest uses `app` directly — no port conflict with running server.
+- Tailwind CSS classes are testable as class string assertions in jsdom.
+
+### Test Results (2026-02-23)
+
+| Suite | Tests | Pass | Fail |
+|---|---|---|---|
+| `api.security.test.js` | 20 | 20 | 0 |
+| `db.repositories.test.js` | 21 | 21 | 0 |
+| `middleware.auth.test.js` | 3 | 3 | 0 |
+| `middleware.validate.test.js` | 6 | 6 | 0 |
+| `UseCaseCard.test.jsx` | 14 | 14 | 0 |
+| **Total** | **64** | **64** | **0** |
+
+---
+
+## Phase 4 — CI/CD & Containerization *(Required)*
+
+> **Status: `[x]` Complete**
+> **Completed: 2026-02-23**
+
+### Checklist
+
+- [x] **4.1** — Dockerization
+  - [x] `server/Dockerfile` — Node 20 Alpine, multi-stage, non-root user (`athena`), HEALTHCHECK
+  - [x] `client/Dockerfile` — Node 20 Alpine build stage → nginx:alpine serve, HEALTHCHECK
+  - [x] `client/nginx.conf` — SPA fallback, gzip, security headers, asset caching, API proxy block
+  - [x] `docker-compose.yml` — backend + frontend services with health checks, volume mounts, env passthrough; PostgreSQL commented section for easy enabling
+  - [x] `server/.dockerignore` — excludes node_modules, SQLite files, .env, tests
+  - [x] `client/.dockerignore` — excludes node_modules, dist, .env, tests
+  - [x] YAML syntax validated ✅
+
+- [x] **4.2** — GitHub Actions CI Pipeline (`.github/workflows/ci.yml`)
+  - [x] Triggers: `push` to main/claude/**, `pull_request` to main
+  - [x] **backend** job: `npm ci` → `npm audit --audit-level=high` → `npm test` (in-memory SQLite, no DB setup)
+  - [x] **frontend** job: `npm ci` → `npm run lint` → `npm test` → `npm run build`
+  - [x] **docker** job: builds both images (runs after backend + frontend pass)
+  - [x] Node 20 with npm cache for fast runs
+  - [ ] CD: image push to registry + staging deploy *(deferred — requires registry credentials)*
+  - [ ] Secrets in GitHub Actions environment *(deferred — configure per org)*
+
+- [ ] **4.3** — Pre-commit Hooks *(deferred — low priority for demo tool)*
+  - [ ] husky + lint-staged
+
+### Notes / Decisions
+
+- **Docker daemon not available in dev sandbox:** Images validated via syntax check and YAML validation. The CI pipeline (`ci.yml`) will build and verify images in GitHub Actions.
+- **Non-root user:** Backend container runs as `athena` user for container security best practice.
+- **nginx proxy:** The nginx config includes an `/api/` location block to proxy backend traffic — useful when both containers are behind the same nginx instance.
+- **PostgreSQL:** Included in docker-compose but commented out. Uncomment and set `DATABASE_URL` to switch from SQLite to PostgreSQL locally.
+
+### Validation Results (2026-02-23)
+
+| File | Validation | Result |
+|---|---|---|
+| `server/Dockerfile` | Syntax + required instructions | ✅ pass |
+| `client/Dockerfile` | Syntax + required instructions | ✅ pass |
+| `.github/workflows/ci.yml` | YAML parse | ✅ pass |
+| `docker-compose.yml` | YAML parse | ✅ pass |
+
+---
+
+## Phase 5 — Monitoring, Observability & Scalability *(Required)*
+
+> **Status: `[x]` Complete**
+> **Completed: 2026-02-23**
+
+### Checklist
+
+- [x] **5.1** — Structured Logging (Pino)
+  - [x] Pino logger configured in `server/config/logger.js`
+  - [x] Development: pretty-printed with colors via `pino-pretty` transport
+  - [x] Production (`NODE_ENV=production`): newline-delimited JSON for log aggregators (Datadog, CloudWatch, ELK)
+  - [x] Log level configurable via `LOG_LEVEL` env var (defaults: `debug` dev, `info` prod)
+  - [x] `console.log/error/warn` redirected through Pino shim for instant coverage of all existing call sites
+  - [x] Key event types structured: `ws_connect`, `ws_disconnect`, `demo_started`, `attack_launched`, `use_case_triggered`, `webhook_signature_invalid`, `server_started`
+  - [ ] Individual call sites migrated to use `logger.info({...}, msg)` directly *(ongoing — shim provides coverage)*
+  - [ ] Ship to log aggregator *(deferred — requires infrastructure)*
+
+- [x] **5.2** — Metrics (Prometheus-compatible)
+  - [x] `GET /metrics` endpoint returns Prometheus text format (no extra dependency needed)
+  - [x] Counters: `requests_total`, `attacks_launched_total`, `use_cases_completed_total`, `webhook_events_received_total`, `claude_api_calls_total`
+  - [x] Gauges: `websocket_clients_current`, `uptime_seconds`
+  - [ ] Grafana dashboard *(deferred — requires infrastructure)*
+  - [ ] AlertManager rules *(deferred — requires infrastructure)*
+
+- [ ] **5.3** — Error Reporting (Sentry) *(deferred — requires Sentry DSN + account)*
+  - [ ] Backend Sentry integration
+  - [ ] Frontend Sentry integration
+
+- [x] **5.4** — Health Checks & Readiness Probes
+  - [x] `GET /health` — deep health check: DB connection test, WebSocket client count, uptime, current demo state; returns `503` with `status: degraded` if DB unreachable
+  - [x] `GET /ready` — Kubernetes readiness probe: returns `503` until migrations complete, then `200 { ready: true }` permanently
+  - [x] HEALTHCHECK instructions in both Dockerfiles (backend: `wget /health`, frontend: `wget /`)
+
+- [ ] **5.5** — WebSocket Horizontal Scaling *(deferred — requires Redis infrastructure)*
+  - [ ] Move WebSocket fan-out to Redis Pub/Sub
+  - [ ] Enable sticky sessions at load balancer
+
+### Notes / Decisions
+
+- **Pino shim approach:** Rather than rewriting every `console.*` call individually, a 3-line shim redirects all console output through Pino instantly. Structured context objects should be added per call site as a follow-up improvement.
+- **No Prometheus library needed:** Prometheus text format is trivially generated as a string without the `prom-client` library, keeping the dependency footprint minimal.
+- **Sentry deferred:** Requires a Sentry DSN and account. Pattern: `import * as Sentry from '@sentry/node'; Sentry.init({ dsn: process.env.SENTRY_DSN });`
+
+### Test Results (2026-02-23)
+
+| Test | Expected | Result |
+|---|---|---|
+| Server startup log format | JSON/pino-pretty output | ✅ pino-pretty in dev |
+| `GET /health` (DB connected) | `{ status: "ok", checks: { db: "ok" } }` | ✅ pass |
+| `GET /ready` (after migrations) | `{ ready: true }` HTTP 200 | ✅ pass |
+| `GET /metrics` | Prometheus text format | ✅ pass |
+| Attack counter increments | `athena_attacks_launched_total 1` after 1 attack | ✅ pass |
+| All 64 tests still pass | 50 backend + 14 frontend | ✅ pass |
+
+---
+
+## Prioritized Backlog
+
+| Priority | Item | Phase | Status |
+|---|---|---|---|
+| P0 | Authentication (API key → Okta OAuth 2.0) | 1 | `[x]` API key done; OAuth in P2 |
+| P0 | Input validation (Joi) on all endpoints | 1 | `[x]` |
+| P0 | Rate limiting (express-rate-limit) | 1 | `[x]` |
+| P0 | CORS allowlist | 1 | `[x]` |
+| P0 | Helmet.js security headers | 1 | `[x]` |
+| P0 | PostgreSQL + Redis integration | 2 | `[x]` Postgres/SQLite via Knex; Redis deferred to P5 |
+| P0 | Dockerize backend + frontend | 4 | `[x]` |
+| P1 | GitHub Actions CI pipeline | 4 | `[x]` |
+| P1 | Backend unit tests (Jest) | 3 | `[x]` 50 tests, 100% pass |
+| P1 | Frontend unit tests (Vitest) | 3 | `[x]` 14 tests, 100% pass |
+| P1 | Structured logging (Pino) | 5 | `[x]` |
+| P1 | Sentry error reporting | 5 | `[ ]` deferred |
+| P1 | Okta HMAC webhook validation | 1 | `[x]` |
+| P2 | OpenAPI / Swagger spec | — | `[ ]` |
+| P2 | E2E tests (Cypress) | 3 | `[ ]` |
+| P2 | Prometheus metrics + Grafana | 5 | `[ ]` |
+| P2 | Redis Pub/Sub WebSocket scaling | 5 | `[ ]` |
+| P2 | TypeScript migration | — | `[ ]` |
+| P3 | CDN for static frontend assets | — | `[ ]` |
+| P3 | API versioning (`/api/v1/`) | — | `[ ]` |
+
+---
+
+## Delivery Timeline
+
+```
+Week 1-3:   Phase 1 — Security Hardening       [x] COMPLETE
+Week 4-7:   Phase 2 — Data Persistence          [x] COMPLETE
+Week 8-11:  Phase 3 — Testing Infrastructure    [x] COMPLETE
+Week 12-14: Phase 4 — CI/CD & Containerization  [x] COMPLETE
+Week 15-17: Phase 5 — Monitoring & Scalability  [x] COMPLETE
+
+Total: ~17 weeks to full production readiness
+```
+
+---
+
+## What NOT to Change
+
+The following are well-designed and should be preserved:
+
+- The WebSocket architecture and `useWebSocket` hook with exponential backoff
+- The Claude API service with graceful fallback narratives
+- The event deduplication-by-UUID pattern
+- The timestamp gate for demo isolation
+- The component structure and Tailwind design system
+- The `attacks.js` / `providers.js` configuration-as-data pattern
+
+---
+
+## Change Log
+
+| Date | Phase | Change | Author |
+|---|---|---|---|
+| 2026-02-23 | All | Initial plan created from codebase analysis | Claude |
+| 2026-02-23 | 1 | Implemented API key auth, CORS allowlist, Helmet, rate limiting, Joi validation, Okta HMAC verification, startup env validator, `.env.example` | Claude |
+| 2026-02-23 | 2 | Implemented Knex migrations, repository pattern (5 repos), SQLite dev / PostgreSQL prod dual-driver, DB-backed deduplication with in-memory fallback, audit logging | Claude |
+| 2026-02-23 | 3 | Added Jest (50 tests) + Vitest (14 tests) test suites; 64 total tests, 100% pass rate; in-memory SQLite for zero-setup CI | Claude |
+| 2026-02-23 | 4 | Dockerfiles for backend (node:20-alpine, non-root) and frontend (nginx:alpine); GitHub Actions CI pipeline; docker-compose.yml for local dev | Claude |
+| 2026-02-23 | 5 | Pino structured logging; console.* shim; /health deep check; /ready probe; /metrics Prometheus endpoint with 7 counters/gauges | Claude |

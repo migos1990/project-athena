@@ -1,0 +1,9 @@
+node_modules
+*.sqlite3
+*.sqlite
+*.log
+.env
+.env.*
+__tests__
+coverage
+.nyc_output
