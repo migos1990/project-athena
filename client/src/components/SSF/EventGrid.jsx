@@ -1,24 +1,30 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { getSeverityColor } from '../../config/providers';
 
-// loading prop: when true (real transmit in progress), shows spinner on all buttons.
-// The local loadingId state is kept for the 600ms visual delay on click before
-// handing off to the parent's async transmit handler.
+// loading prop: when true (real transmit in progress from parent), disables all
+// buttons. The clicked button continues to show its spinner via local loadingId.
+// Non-clicked buttons are dimmed/disabled but show no spinner.
 export function EventGrid({ events, providerColor, onEventClick, disabled, loading = false }) {
   const [loadingId, setLoadingId] = useState(null);
+
+  // Clear local loading indicator when parent signals transmit is complete
+  useEffect(() => {
+    if (!loading) setLoadingId(null);
+  }, [loading]);
 
   const handleClick = async (event) => {
     if (disabled || loadingId || loading) return;
     setLoadingId(event.id);
     await new Promise(r => setTimeout(r, 300)); // brief visual feedback before async transmit
     onEventClick(event);
-    setLoadingId(null);
+    // loadingId stays set until `loading` prop goes false (via useEffect above)
   };
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       {events.map((event) => {
-        const isLoading = loadingId === event.id || loading;
+        // Only show spinner on the specific button that was clicked
+        const isSpinning = loadingId === event.id;
         const severityColor = getSeverityColor(event.severity);
 
         return (
@@ -40,12 +46,12 @@ export function EventGrid({ events, providerColor, onEventClick, disabled, loadi
                   </span>
                 </div>
                 <div className="font-semibold text-sm ssf-text-primary">
-                  {isLoading ? 'Transmitting...' : event.label}
+                  {isSpinning ? 'Transmitting...' : event.label}
                 </div>
                 <div className="text-xs ssf-text-muted mt-0.5">{event.description}</div>
               </div>
               <div className="w-8 h-8 flex items-center justify-center rounded-lg shrink-0" style={{ backgroundColor: providerColor + '18' }}>
-                {isLoading ? (
+                {isSpinning ? (
                   <svg className="w-4 h-4 animate-spin" style={{ color: providerColor }} fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />

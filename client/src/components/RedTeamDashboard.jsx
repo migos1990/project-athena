@@ -4,7 +4,7 @@ import { ATTACK_PATTERNS } from '../config/attacks';
 import { PROVIDERS, PROVIDER_LIST } from '../config/providers';
 import { EventGrid } from './SSF/EventGrid';
 import { PillarSection } from './PillarSection';
-import { generateKeyPair } from '../utils/crypto';
+import { generateKeyPair, signSecurityEventToken } from '../utils/crypto';
 import { CopyButton } from './SSF/CopyButton';
 
 const API_KEY = import.meta.env.VITE_DEMO_API_KEY || '';
@@ -21,6 +21,7 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
   const [selectedProvider, setSelectedProvider] = useState('crowdstrike');
   const [keys, setKeys] = useState(null);        // { privatePem, publicJwk, kid }
   const [generatingKeys, setGeneratingKeys] = useState(false);
+  const [keyError, setKeyError] = useState(null);
   const [lastPayload, setLastPayload] = useState(null);
   const [showPayload, setShowPayload] = useState(false);
   const [transmitting, setTransmitting] = useState(false);
@@ -37,7 +38,9 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
   useEffect(() => {
     const saved = localStorage.getItem('ssf-config');
     if (saved) {
-      try { setConfig(JSON.parse(saved)); } catch {}
+      try { setConfig(JSON.parse(saved)); } catch {
+        localStorage.removeItem('ssf-config'); // clear corrupted entry
+      }
     }
   }, []);
 
@@ -86,15 +89,17 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
     setTransmitResult(null);
   };
 
-  // Real RSA-256 key generation using jose + Web Crypto API
+  // Real RSA-2048 key generation using jose + Web Crypto API
   const handleGenerateKeys = async () => {
     setGeneratingKeys(true);
     setKeys(null);
+    setKeyError(null);
     setTransmitResult(null);
     try {
       const result = await generateKeyPair();
       setKeys(result);
     } catch (err) {
+      setKeyError('Key generation failed — your browser may not support Web Crypto API.');
       console.error('Key generation failed:', err);
     } finally {
       setGeneratingKeys(false);
@@ -113,17 +118,50 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
     URL.revokeObjectURL(url);
   };
 
-  // Real SSF transmission — signs JWT server-side and posts to Okta
+  // Signs the JWT client-side and forwards only the signed token to the server.
+  // The private key never leaves the browser.
   const handleTransmitEvent = async (event) => {
     if (!keys || !isConfigured || transmitting) return;
 
     setTransmitting(true);
     setTransmitResult(null);
-    setLastPayload(null);
-    setShowPayload(false);
 
     const timestamp = Math.floor(Date.now() / 1000);
+
+    // Normalise Okta domain → audience URL (same logic as server)
+    const inputDomain = config.oktaDomain.trim();
+    const domainWithScheme = inputDomain.startsWith('http') ? inputDomain : `https://${inputDomain}`;
+    let tokenAudience;
+    try {
+      tokenAudience = `https://${new URL(domainWithScheme).hostname}`;
+    } catch {
+      setTransmitting(false);
+      setTransmitResult({ success: false, error: 'Invalid Okta domain' });
+      return;
+    }
+
+    // Build JWT payload client-side and show it immediately
     const eventsPayload = event.buildPayload(config.subjectEmail, timestamp);
+    const jti = crypto.randomUUID();
+    const payload = {
+      iss: config.issuerUrl,
+      iat: timestamp,
+      jti,
+      aud: tokenAudience,
+      events: eventsPayload,
+    };
+    setLastPayload(payload);
+    setShowPayload(true);
+
+    // Sign JWT entirely in the browser
+    let signedJwt;
+    try {
+      signedJwt = await signSecurityEventToken({ payload, kid: keys.kid, privatePem: keys.privatePem });
+    } catch (err) {
+      setTransmitting(false);
+      setTransmitResult({ success: false, error: 'JWT signing failed', errorDescription: err.message });
+      return;
+    }
 
     try {
       const response = await fetch(`${apiUrl}/ssf/transmit`, {
@@ -134,11 +172,7 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
         },
         body: JSON.stringify({
           oktaDomain: config.oktaDomain,
-          issuerUrl: config.issuerUrl,
-          subjectEmail: config.subjectEmail,
-          privateKeyPem: keys.privatePem,
-          keyId: keys.kid,
-          eventsPayload,
+          signedJwt,
           providerName: provider.name,
           eventLabel: event.label,
           providerId: selectedProvider,
@@ -154,11 +188,6 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
         hint: data.hint,
         debugInfo: data.debugInfo,
       });
-
-      if (data.payload) {
-        setLastPayload(data.payload);
-        setShowPayload(true);
-      }
     } catch (err) {
       setTransmitResult({ success: false, error: 'Network error', errorDescription: err.message });
     } finally {
@@ -166,7 +195,8 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
     }
   };
 
-  const isConfigured = config.oktaDomain && config.subjectEmail;
+  // All three fields are required before transmission is allowed
+  const isConfigured = config.oktaDomain && config.issuerUrl && config.subjectEmail;
 
   const firstPartyLaunched = regularAttacks.filter(a => launchedAttacks[a.id]).length;
   const ssfAttacks = attacks?.filter(a => a.attackType === 'ssf-transmitter') || [];
@@ -315,8 +345,11 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
                     disabled={generatingKeys}
                     className="w-full text-xs font-semibold px-4 py-2.5 rounded-lg transition-all duration-150 text-white hover:opacity-90 active:scale-[0.98] disabled:opacity-60 bg-okta-blue"
                   >
-                    {generatingKeys ? 'Generating…' : keys ? 'Regenerate RSA-256 Keys' : 'Generate RSA-256 Keys'}
+                    {generatingKeys ? 'Generating…' : keys ? 'Regenerate RSA-2048 Keys' : 'Generate RSA-2048 Keys'}
                   </button>
+                  {keyError && (
+                    <p className="text-xs text-red-600 mt-2">{keyError}</p>
+                  )}
                   {keys && (
                     <div className="mt-3 space-y-2">
                       <div className="flex items-center justify-between">
@@ -392,7 +425,7 @@ export function RedTeamDashboard({ attacks, apiUrl }) {
                   />
                   {(!keys || !isConfigured) && (
                     <div className="mt-3 text-xs text-okta-medium-gray text-center py-2 rounded-lg bg-yellow-50">
-                      {!keys ? 'Generate RSA-256 keys first' : 'Enter Okta domain and target subject'}
+                      {!keys ? 'Generate RSA-2048 keys first' : !config.issuerUrl ? 'Enter Issuer URL' : 'Enter Okta domain and target subject'}
                     </div>
                   )}
                 </div>

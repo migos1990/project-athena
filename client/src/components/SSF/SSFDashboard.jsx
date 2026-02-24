@@ -3,19 +3,11 @@ import { Link } from 'react-router-dom';
 import { PROVIDERS, PROVIDER_LIST } from '../../config/providers';
 import { EventGrid } from './EventGrid';
 import { ActivityLog } from './ActivityLog';
-import { generateKeyPair } from '../../utils/crypto';
+import { generateKeyPair, signSecurityEventToken } from '../../utils/crypto';
+import { getApiUrl } from '../../utils/api';
 import { CopyButton } from './CopyButton';
 
 const API_KEY = import.meta.env.VITE_DEMO_API_KEY || '';
-
-function getApiUrl() {
-  if (window.location.hostname.includes('app.github.dev')) {
-    const parts = window.location.hostname.split('-');
-    const codespaceName = `${parts[0]}-${parts[1]}-${parts[2]}`;
-    return `https://${codespaceName}-3001.app.github.dev`;
-  }
-  return `${window.location.protocol}//${window.location.hostname}:3001`;
-}
 
 export function SSFDashboard() {
   const [isDark, setIsDark] = useState(true);
@@ -27,6 +19,7 @@ export function SSFDashboard() {
   const [selectedProvider, setSelectedProvider] = useState('crowdstrike');
   const [keys, setKeys] = useState(null);        // { privatePem, publicJwk, kid }
   const [generatingKeys, setGeneratingKeys] = useState(false);
+  const [keyError, setKeyError] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
   const [lastPayload, setLastPayload] = useState(null);
   const [showPayload, setShowPayload] = useState(false);
@@ -36,7 +29,9 @@ export function SSFDashboard() {
   useEffect(() => {
     const saved = localStorage.getItem('ssf-config');
     if (saved) {
-      try { setConfig(JSON.parse(saved)); } catch {}
+      try { setConfig(JSON.parse(saved)); } catch {
+        localStorage.removeItem('ssf-config'); // clear corrupted entry
+      }
     }
   }, []);
 
@@ -55,14 +50,16 @@ export function SSFDashboard() {
     setConfig(prev => ({ ...prev, issuerUrl: p.defaultIssuer }));
   };
 
-  // Real RSA-256 key generation using jose + Web Crypto API
+  // Real RSA-2048 key generation using jose + Web Crypto API
   const handleGenerateKeys = async () => {
     setGeneratingKeys(true);
     setKeys(null);
+    setKeyError(null);
     try {
       const result = await generateKeyPair();
       setKeys(result);
     } catch (err) {
+      setKeyError('Key generation failed — your browser may not support Web Crypto API.');
       console.error('Key generation failed:', err);
     } finally {
       setGeneratingKeys(false);
@@ -81,14 +78,59 @@ export function SSFDashboard() {
     URL.revokeObjectURL(url);
   };
 
-  // Real SSF transmission — signs JWT server-side and posts to Okta
+  // Signs the JWT client-side and forwards only the signed token to the server.
+  // The private key never leaves the browser.
   const handleTransmitEvent = async (event) => {
     if (!keys || !isConfigured || transmitting) return;
 
     setTransmitting(true);
     const apiUrl = getApiUrl();
     const timestamp = Math.floor(Date.now() / 1000);
+
+    // Normalise Okta domain → audience URL (same logic as server)
+    const inputDomain = config.oktaDomain.trim();
+    const domainWithScheme = inputDomain.startsWith('http') ? inputDomain : `https://${inputDomain}`;
+    let tokenAudience;
+    try {
+      tokenAudience = `https://${new URL(domainWithScheme).hostname}`;
+    } catch {
+      setTransmitting(false);
+      setActivityLog(prev => [{
+        id: Date.now(), timestamp: new Date().toISOString(),
+        provider: provider.name, event: event.label,
+        success: false, error: 'Invalid Okta domain',
+      }, ...prev]);
+      return;
+    }
+
+    // Build JWT payload client-side
     const eventsPayload = event.buildPayload(config.subjectEmail, timestamp);
+    const jti = crypto.randomUUID();
+    const payload = {
+      iss: config.issuerUrl,
+      iat: timestamp,
+      jti,
+      aud: tokenAudience,
+      events: eventsPayload,
+    };
+
+    // Show payload immediately — no need to wait for server round-trip
+    setLastPayload(payload);
+    setShowPayload(true);
+
+    // Sign JWT entirely in the browser
+    let signedJwt;
+    try {
+      signedJwt = await signSecurityEventToken({ payload, kid: keys.kid, privatePem: keys.privatePem });
+    } catch (err) {
+      setTransmitting(false);
+      setActivityLog(prev => [{
+        id: Date.now(), timestamp: new Date().toISOString(),
+        provider: provider.name, event: event.label,
+        success: false, error: 'JWT signing failed', hint: err.message,
+      }, ...prev]);
+      return;
+    }
 
     try {
       const response = await fetch(`${apiUrl}/ssf/transmit`, {
@@ -99,11 +141,7 @@ export function SSFDashboard() {
         },
         body: JSON.stringify({
           oktaDomain: config.oktaDomain,
-          issuerUrl: config.issuerUrl,
-          subjectEmail: config.subjectEmail,
-          privateKeyPem: keys.privatePem,
-          keyId: keys.kid,
-          eventsPayload,
+          signedJwt,
           providerName: provider.name,
           eventLabel: event.label,
           providerId: selectedProvider,
@@ -111,11 +149,6 @@ export function SSFDashboard() {
       });
 
       const data = await response.json();
-
-      if (data.payload) {
-        setLastPayload(data.payload);
-        setShowPayload(true);
-      }
 
       setActivityLog(prev => [{
         id: Date.now(),
@@ -126,7 +159,7 @@ export function SSFDashboard() {
         status: data.status || response.status,
         error: data.error,
         hint: data.hint,
-        jti: data.payload?.jti,
+        jti,
       }, ...prev]);
 
     } catch (err) {
@@ -143,7 +176,8 @@ export function SSFDashboard() {
     }
   };
 
-  const isConfigured = config.oktaDomain && config.subjectEmail;
+  // All three fields are required before transmission is allowed
+  const isConfigured = config.oktaDomain && config.issuerUrl && config.subjectEmail;
 
   return (
     <div className={isDark ? 'ssf-dark' : 'ssf-light'}>
@@ -272,8 +306,12 @@ export function SSFDashboard() {
                   className="w-full text-xs font-semibold px-4 py-2.5 rounded-lg transition-all duration-150 text-white hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
                   style={{ backgroundColor: '#1662dd' }}
                 >
-                  {generatingKeys ? 'Generating…' : keys ? 'Regenerate RSA-256 Keys' : 'Generate RSA-256 Keys'}
+                  {generatingKeys ? 'Generating…' : keys ? 'Regenerate RSA-2048 Keys' : 'Generate RSA-2048 Keys'}
                 </button>
+
+                {keyError && (
+                  <p className="text-xs text-red-500 mt-2">{keyError}</p>
+                )}
 
                 {keys && (
                   <div className="mt-3 space-y-2">
@@ -350,7 +388,7 @@ export function SSFDashboard() {
 
                 {(!keys || !isConfigured) && (
                   <div className="mt-3 text-[11px] ssf-text-muted text-center py-2 rounded-lg" style={{ backgroundColor: 'rgba(234,179,8,0.08)' }}>
-                    {!keys ? 'Generate RSA-256 keys first' : 'Enter Okta domain and target subject'}
+                    {!keys ? 'Generate RSA-2048 keys first' : !config.issuerUrl ? 'Enter Issuer URL' : 'Enter Okta domain and target subject'}
                   </div>
                 )}
               </div>

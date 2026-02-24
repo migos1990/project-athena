@@ -47,25 +47,16 @@ function validate(schema) {
 }
 
 // Schema for POST /ssf/transmit
+// The JWT is now signed client-side; this endpoint only receives the pre-signed JWT
+// and forwards it to Okta. Private key material never transits the server.
 const ssfTransmitSchema = Joi.object({
   oktaDomain: Joi.string().trim().required()
     .messages({ 'any.required': 'oktaDomain is required' }),
-  issuerUrl: Joi.string().trim().uri().required()
+  signedJwt: Joi.string().max(16384).required()
     .messages({
-      'string.uri': 'issuerUrl must be a valid URL',
-      'any.required': 'issuerUrl is required'
+      'any.required': 'signedJwt is required',
+      'string.max': 'signedJwt exceeds maximum allowed size'
     }),
-  subjectEmail: Joi.string().trim().email().required()
-    .messages({
-      'string.email': 'subjectEmail must be a valid email address',
-      'any.required': 'subjectEmail is required'
-    }),
-  privateKeyPem: Joi.string().required()
-    .messages({ 'any.required': 'privateKeyPem is required' }),
-  keyId: Joi.string().trim().required()
-    .messages({ 'any.required': 'keyId is required' }),
-  eventsPayload: Joi.object().required()
-    .messages({ 'any.required': 'eventsPayload is required' }),
   providerName: Joi.string().required()
     .messages({ 'any.required': 'providerName is required' }),
   eventLabel: Joi.string().required()
